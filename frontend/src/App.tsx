@@ -1,13 +1,16 @@
-import React, { useState, useEffect } from 'react'
 import Dashboard from './components/Dashboard'
-import { WebSocketProvider } from './contexts/WebSocketContext'
 import './App.css'
 
 function App() {
   return (
-    <WebSocketProvider>
-      <Dashboard />
-    </WebSocketProvider>
+    <div className="app">
+      <header className="app-header">
+        <h1>ERAS - Emergency Response Assistance System</h1>
+      </header>
+      <main className="app-main">
+        <Dashboard />
+      </main>
+    </div>
   )
 }
 

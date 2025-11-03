@@ -1,25 +1,36 @@
-"""Dashboard API Service - Backend API for frontend dashboard."""
+"""
+Dashboard API Service - Aggregated API and WebSocket gateway for frontend.
+"""
+
 import os
+import logging
 import sys
-from typing import Optional, List
-from fastapi import FastAPI, WebSocket, WebSocketDisconnect, BackgroundTasks
-from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import JSONResponse
-import psycopg2
-from psycopg2.extras import RealDictCursor
-import json
 import asyncio
-import threading
+from datetime import datetime
+from typing import Dict, List
+from collections import defaultdict
 
-# Add shared module to path
-sys.path.append(os.path.join(os.path.dirname(__file__), '../../'))
+from fastapi import FastAPI, WebSocket, WebSocketDisconnect, HTTPException
+from fastapi.middleware.cors import CORSMiddleware
+import httpx
 
-from shared.redis_client import create_redis_client, get_session_data
-from shared.kafka_client import create_consumer, create_producer, consume_messages
-from shared.types import Session, ProcessedTranscript, AISuggestion
+from shared.kafka_client import create_consumer
+from shared.types import Transcript, Suggestion
 
-app = FastAPI(title="Dashboard API Service", version="1.0.0")
+# Add parent directory to path to access shared module
+parent_dir = os.path.abspath(os.path.join(os.path.dirname(__file__), '../../'))
+sys.path.insert(0, parent_dir)
 
+# Configure logging
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
+)
+logger = logging.getLogger(__name__)
+
+app = FastAPI(title="Dashboard API Service", version="0.1.0")
+
+# Enable CORS for frontend communication
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
@@ -28,257 +39,287 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-redis_client = create_redis_client()
-producer = create_producer()
-
-# Database connection
-POSTGRES_HOST = os.getenv("POSTGRES_HOST", "localhost")
-POSTGRES_DB = os.getenv("POSTGRES_DB", "eras_db")
-POSTGRES_USER = os.getenv("POSTGRES_USER", "eras_user")
-POSTGRES_PASSWORD = os.getenv("POSTGRES_PASSWORD", "eras_password")
-
-
-def get_db_connection():
-    """Get PostgreSQL connection."""
-    return psycopg2.connect(
-        host=POSTGRES_HOST,
-        database=POSTGRES_DB,
-        user=POSTGRES_USER,
-        password=POSTGRES_PASSWORD
-    )
-
+# In-memory storage for sessions, transcripts, and suggestions
+# TODO: Store in PostgreSQL
+sessions: Dict[str, Dict] = {}
+transcripts_by_session: Dict[str, List[Transcript]] = defaultdict(list)
+suggestions_by_session: Dict[str, List[Suggestion]] = defaultdict(list)
 
 # WebSocket connection manager
 class ConnectionManager:
     def __init__(self):
         self.active_connections: List[WebSocket] = []
-        self.pubsub_running = False
-        self.message_queue = []
-        self.queue_lock = threading.Lock()
 
     async def connect(self, websocket: WebSocket):
         await websocket.accept()
         self.active_connections.append(websocket)
-        
-        # Start Redis pubsub listener if not already running
-        if not self.pubsub_running:
-            self.start_redis_listener()
+        logger.info(f"WebSocket client connected. Total connections: {len(self.active_connections)}")
 
     def disconnect(self, websocket: WebSocket):
-        if websocket in self.active_connections:
-            self.active_connections.remove(websocket)
+        self.active_connections.remove(websocket)
+        logger.info(f"WebSocket client disconnected. Total connections: {len(self.active_connections)}")
 
     async def broadcast(self, message: dict):
+        """Broadcast message to all connected WebSocket clients."""
         disconnected = []
         for connection in self.active_connections:
             try:
                 await connection.send_json(message)
-            except:
+            except Exception as e:
+                logger.error(f"Error sending to WebSocket client: {e}")
                 disconnected.append(connection)
         
-        # Remove disconnected connections
+        # Remove disconnected clients
         for conn in disconnected:
             self.disconnect(conn)
-    
-    def queue_message(self, message: dict):
-        """Queue a message for broadcasting."""
-        with self.queue_lock:
-            self.message_queue.append(message)
-    
-    def get_queued_messages(self) -> List[dict]:
-        """Get and clear queued messages."""
-        with self.queue_lock:
-            messages = self.message_queue[:]
-            self.message_queue.clear()
-            return messages
-    
-    def start_redis_listener(self):
-        """Start background thread to listen to Redis pubsub."""
-        def listen():
-            self.pubsub_running = True
-            pubsub = redis_client.pubsub()
-            pubsub.psubscribe("transcript:*", "suggestion:*", "dispatch:*")
-            
-            for message in pubsub.listen():
-                if message['type'] == 'pmessage':
-                    try:
-                        data = json.loads(message['data'])
-                        # Queue for broadcast
-                        self.queue_message(data)
-                    except Exception as e:
-                        print(f"Error processing Redis message: {e}")
-        
-        thread = threading.Thread(target=listen, daemon=True)
-        thread.start()
-
-
-# Background task to process message queue
-async def process_message_queue():
-    """Background task to process and broadcast queued messages."""
-    while True:
-        messages = manager.get_queued_messages()
-        for msg in messages:
-            await manager.broadcast(msg)
-        await asyncio.sleep(0.1)
-
 
 manager = ConnectionManager()
 
-
-@app.get("/api/v1/sessions")
-async def get_sessions(status: Optional[str] = None):
-    """Get all sessions, optionally filtered by status."""
-    conn = get_db_connection()
-    try:
-        with conn.cursor(cursor_factory=RealDictCursor) as cur:
-            if status:
-                cur.execute("SELECT * FROM sessions WHERE status = %s ORDER BY start_time DESC", (status,))
-            else:
-                cur.execute("SELECT * FROM sessions ORDER BY start_time DESC")
-            
-            sessions = cur.fetchall()
-            return [dict(s) for s in sessions]
-    finally:
-        conn.close()
-
-
-@app.get("/api/v1/sessions/{session_id}")
-async def get_session(session_id: str):
-    """Get session details."""
-    conn = get_db_connection()
-    try:
-        with conn.cursor(cursor_factory=RealDictCursor) as cur:
-            cur.execute("SELECT * FROM sessions WHERE session_id = %s", (session_id,))
-            session = cur.fetchone()
-            
-            if not session:
-                return JSONResponse({"error": "Session not found"}, status_code=404)
-            
-            # Get transcripts
-            cur.execute(
-                "SELECT * FROM transcripts WHERE session_id = %s ORDER BY timestamp",
-                (session_id,)
-            )
-            transcripts = cur.fetchall()
-            
-            # Get suggestions
-            cur.execute(
-                "SELECT * FROM suggestions WHERE session_id = %s ORDER BY timestamp",
-                (session_id,)
-            )
-            suggestions = cur.fetchall()
-            
-            return {
-                "session": dict(session),
-                "transcripts": [dict(t) for t in transcripts],
-                "suggestions": [dict(s) for s in suggestions]
-            }
-    finally:
-        conn.close()
-
-
-@app.post("/api/v1/suggestions/{suggestion_id}/action")
-async def handle_suggestion_action(suggestion_id: str, action: dict):
-    """Handle suggestion action (accept/decline/modify)."""
-    conn = get_db_connection()
-    try:
-        action_type = action.get("action")  # accept, decline, modify
-        
-        with conn.cursor(cursor_factory=RealDictCursor) as cur:
-            # Update suggestion status
-            cur.execute("""
-                UPDATE suggestions 
-                SET status = %s 
-                WHERE suggestion_id = %s
-            """, (action_type, suggestion_id))
-            
-            if action_type == "accept":
-                # Get suggestion details
-                cur.execute("SELECT * FROM suggestions WHERE suggestion_id = %s", (suggestion_id,))
-                suggestion = cur.fetchone()
-                
-                if suggestion:
-                    # Apply suggestion to session
-                    if suggestion['type'] == 'incident_code':
-                        cur.execute("""
-                            UPDATE sessions 
-                            SET incident_code = %s 
-                            WHERE session_id = %s
-                        """, (suggestion['content'].get('code'), suggestion['session_id']))
-            
-            conn.commit()
-            
-            # Broadcast update via WebSocket
-            broadcast_msg = {
-                "type": "suggestion_action",
-                "suggestion_id": suggestion_id,
-                "action": action_type,
-                "session_id": suggestion['session_id'] if suggestion else None
-            }
-            await manager.broadcast(broadcast_msg)
-            
-            return {"status": "success", "action": action_type}
-    finally:
-        conn.close()
-
-
-@app.get("/api/v1/vehicles")
-async def get_vehicles(status: Optional[str] = None):
-    """Get all vehicles."""
-    # Proxy to geospatial-dispatch service
-    import httpx
-    async with httpx.AsyncClient() as client:
-        url = f"http://geospatial-dispatch:8004/api/v1/vehicles"
-        if status:
-            url += f"?status={status}"
-        response = await client.get(url)
-        return response.json()
-
-
-@app.post("/api/v1/dispatch")
-async def dispatch(command: dict):
-    """Create dispatch command."""
-    import httpx
-    async with httpx.AsyncClient() as client:
-        response = await client.post(
-            "http://geospatial-dispatch:8004/api/v1/dispatch",
-            json=command
-        )
-        return response.json()
-
-
-@app.websocket("/ws")
-async def websocket_endpoint(websocket: WebSocket):
-    """WebSocket endpoint for real-time updates."""
-    await manager.connect(websocket)
-    
-    try:
-        # Listen for messages from client
-        while True:
-            try:
-                # Wait for message (or timeout)
-                await websocket.receive_text()
-            except:
-                # Client disconnected or error
-                break
-    except WebSocketDisconnect:
-        manager.disconnect(websocket)
-
-
-@app.on_event("startup")
-async def startup():
-    """Start background tasks on service startup."""
-    # Start message queue processor
-    asyncio.create_task(process_message_queue())
+# Service URLs (from docker-compose network)
+GEOSPATIAL_DISPATCH_URL = os.getenv("GEOSPATIAL_DISPATCH_URL", "http://geospatial-dispatch:8002")
 
 
 @app.get("/health")
-async def health():
+async def health_check():
     """Health check endpoint."""
     return {"status": "healthy", "service": "dashboard-api"}
 
 
+@app.get("/sessions")
+async def get_sessions():
+    """
+    Get all active sessions.
+    
+    Returns:
+        List of session summaries
+    """
+    session_list = []
+    for session_id, session_data in sessions.items():
+        session_list.append({
+            "session_id": session_id,
+            "created_at": session_data.get("created_at"),
+            "transcript_count": len(transcripts_by_session.get(session_id, [])),
+            "suggestion_count": len(suggestions_by_session.get(session_id, [])),
+        })
+    return {"sessions": session_list}
+
+
+@app.get("/sessions/{session_id}/transcript")
+async def get_session_transcript(session_id: str):
+    """
+    Get transcript for a specific session.
+    
+    Args:
+        session_id: Session identifier
+        
+    Returns:
+        List of transcripts for the session
+    """
+    transcripts = transcripts_by_session.get(session_id, [])
+    return {
+        "session_id": session_id,
+        "transcripts": [
+            {**t.model_dump(), "timestamp": t.timestamp.isoformat()}
+            for t in transcripts
+        ]
+    }
+
+
+@app.get("/sessions/{session_id}/suggestions")
+async def get_session_suggestions(session_id: str):
+    """
+    Get suggestions for a specific session.
+    
+    Args:
+        session_id: Session identifier
+        
+    Returns:
+        List of suggestions for the session
+    """
+    suggestions = suggestions_by_session.get(session_id, [])
+    return {
+        "session_id": session_id,
+        "suggestions": [
+            {**s.model_dump(), "timestamp": s.timestamp.isoformat()}
+            for s in suggestions
+        ]
+    }
+
+
+@app.get("/sessions/{session_id}/assignment")
+async def get_session_assignment(session_id: str):
+    """
+    Get vehicle assignment for a specific session.
+    Fetches from Geospatial Dispatch Service.
+    
+    Args:
+        session_id: Session identifier
+        
+    Returns:
+        Assignment suggestion
+    """
+    try:
+        async with httpx.AsyncClient() as client:
+            response = await client.get(
+                f"{GEOSPATIAL_DISPATCH_URL}/assignments/{session_id}",
+                timeout=5.0
+            )
+            if response.status_code == 404:
+                raise HTTPException(status_code=404, detail="Assignment not found")
+            response.raise_for_status()
+            return response.json()
+    except httpx.RequestError as e:
+        logger.error(f"Error fetching assignment from geospatial service: {e}")
+        raise HTTPException(status_code=503, detail="Geospatial service unavailable")
+
+
+@app.get("/vehicles")
+async def get_vehicles():
+    """
+    Get list of vehicles.
+    Fetches from Geospatial Dispatch Service.
+    
+    Returns:
+        List of vehicles
+    """
+    try:
+        async with httpx.AsyncClient() as client:
+            response = await client.get(
+                f"{GEOSPATIAL_DISPATCH_URL}/vehicles",
+                timeout=5.0
+            )
+            response.raise_for_status()
+            return response.json()
+    except httpx.RequestError as e:
+        logger.error(f"Error fetching vehicles from geospatial service: {e}")
+        raise HTTPException(status_code=503, detail="Geospatial service unavailable")
+
+
+@app.websocket("/ws")
+async def websocket_endpoint(websocket: WebSocket):
+    """
+    WebSocket endpoint for real-time updates.
+    
+    Clients connect to receive transcripts and suggestions as they arrive.
+    """
+    await manager.connect(websocket)
+    try:
+        while True:
+            # Keep connection alive and handle client messages if needed
+            data = await websocket.receive_text()
+            # For now, we don't process incoming messages
+            # TODO: handle subscription filters, etc.
+    except WebSocketDisconnect:
+        manager.disconnect(websocket)
+
+
+def process_transcript_message(message_value: dict):
+    """Process a transcript message from Kafka."""
+    try:
+        # Parse transcript
+        if isinstance(message_value.get('timestamp'), str):
+            message_value['timestamp'] = datetime.fromisoformat(message_value['timestamp'])
+        
+        transcript = Transcript(**message_value)
+        
+        # Store transcript
+        session_id = transcript.session_id
+        transcripts_by_session[session_id].append(transcript)
+        
+        # Create session if it doesn't exist
+        if session_id not in sessions:
+            sessions[session_id] = {
+                "created_at": transcript.timestamp.isoformat(),
+            }
+        
+        logger.info(f"Processed transcript for session: {session_id}")
+        
+        # Broadcast to WebSocket clients
+        transcript_dict = transcript.model_dump()
+        transcript_dict['timestamp'] = transcript_dict['timestamp'].isoformat()
+        asyncio.create_task(manager.broadcast({
+            "type": "transcript",
+            "data": transcript_dict
+        }))
+        
+    except Exception as e:
+        logger.error(f"Error processing transcript message: {e}", exc_info=True)
+
+
+def process_suggestion_message(message_value: dict):
+    """Process a suggestion message from Kafka."""
+    try:
+        # Parse suggestion
+        if isinstance(message_value.get('timestamp'), str):
+            message_value['timestamp'] = datetime.fromisoformat(message_value['timestamp'])
+        
+        suggestion = Suggestion(**message_value)
+        
+        # Store suggestion
+        session_id = suggestion.session_id
+        suggestions_by_session[session_id].append(suggestion)
+        
+        logger.info(f"Processed suggestion for session: {session_id}")
+        
+        # Broadcast to WebSocket clients
+        suggestion_dict = suggestion.model_dump()
+        suggestion_dict['timestamp'] = suggestion_dict['timestamp'].isoformat()
+        asyncio.create_task(manager.broadcast({
+            "type": "suggestion",
+            "data": suggestion_dict
+        }))
+        
+    except Exception as e:
+        logger.error(f"Error processing suggestion message: {e}", exc_info=True)
+
+
+async def kafka_consumer_task():
+    """Background task to consume from Kafka and process messages."""
+    bootstrap_servers = os.getenv("KAFKA_BOOTSTRAP_SERVERS", "kafka:29092")
+    
+    logger.info(f"Starting Kafka consumer. Connecting to: {bootstrap_servers}")
+    
+    try:
+        consumer = create_consumer(
+            topics=["transcripts", "suggestions"],
+            group_id="dashboard-api-service",
+            bootstrap_servers=bootstrap_servers
+        )
+        
+        logger.info("Kafka consumer started. Waiting for messages...")
+        
+        for message in consumer:
+            try:
+                topic = message.topic
+                message_value = message.value
+                
+                if topic == "transcripts":
+                    process_transcript_message(message_value)
+                elif topic == "suggestions":
+                    process_suggestion_message(message_value)
+                    
+            except Exception as e:
+                logger.error(f"Error processing Kafka message: {e}", exc_info=True)
+                continue
+                
+    except Exception as e:
+        logger.error(f"Fatal error in Kafka consumer: {e}", exc_info=True)
+
+
+@app.on_event("startup")
+async def startup_event():
+    """Start background tasks on application startup."""
+    asyncio.create_task(kafka_consumer_task())
+    logger.info("Dashboard API Service started")
+
+
+@app.on_event("shutdown")
+async def shutdown_event():
+    """Cleanup on application shutdown."""
+    logger.info("Dashboard API Service shutting down")
+
+
 if __name__ == "__main__":
     import uvicorn
-    uvicorn.run(app, host="0.0.0.0", port=8005)
+    uvicorn.run(app, host="0.0.0.0", port=8000)
 

@@ -1,17 +1,20 @@
 version: '3.8'
 
 services:
-  # Kafka
   zookeeper:
     image: confluentinc/cp-zookeeper:latest
+    container_name: eras-zookeeper
     environment:
       ZOOKEEPER_CLIENT_PORT: 2181
       ZOOKEEPER_TICK_TIME: 2000
     ports:
       - "2181:2181"
+    networks:
+      - eras-network
 
   kafka:
     image: confluentinc/cp-kafka:latest
+    container_name: eras-kafka
     depends_on:
       - zookeeper
     ports:
@@ -19,129 +22,108 @@ services:
     environment:
       KAFKA_BROKER_ID: 1
       KAFKA_ZOOKEEPER_CONNECT: zookeeper:2181
-      KAFKA_ADVERTISED_LISTENERS: PLAINTEXT://localhost:9092
+      KAFKA_ADVERTISED_LISTENERS: PLAINTEXT://localhost:9092,PLAINTEXT_INTERNAL://kafka:29092
+      KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: PLAINTEXT:PLAINTEXT,PLAINTEXT_INTERNAL:PLAINTEXT
+      KAFKA_INTER_BROKER_LISTENER_NAME: PLAINTEXT_INTERNAL
       KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 1
+      KAFKA_AUTO_CREATE_TOPICS_ENABLE: "true"
+    networks:
+      - eras-network
 
-  # PostgreSQL
   postgres:
-    image: postgres:15-alpine
+    image: postgres:15
+    container_name: eras-postgres
     environment:
-      POSTGRES_DB: eras_db
-      POSTGRES_USER: eras_user
-      POSTGRES_PASSWORD: eras_password
+      POSTGRES_DB: ${POSTGRES_DB:-eras_db}
+      POSTGRES_USER: ${POSTGRES_USER:-eras_user}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-eras_pass}
     ports:
       - "5432:5432"
     volumes:
       - postgres_data:/var/lib/postgresql/data
       - ./infrastructure/postgres/init.sql:/docker-entrypoint-initdb.d/init.sql
+    networks:
+      - eras-network
 
-  # Redis
-  redis:
-    image: redis:7-alpine
-    ports:
-      - "6379:6379"
-    volumes:
-      - redis_data:/data
-
-  # Audio Ingestion Service
   audio-ingestion:
     build:
-      context: ./services/audio-ingestion
-      dockerfile: Dockerfile
+      context: .
+      dockerfile: services/audio-ingestion/Dockerfile
+    container_name: eras-audio-ingestion
     ports:
       - "8001:8001"
     environment:
-      KAFKA_BROKER: kafka:9092
-      REDIS_HOST: redis
-      REDIS_PORT: 6379
+      KAFKA_BOOTSTRAP_SERVERS: kafka:29092
     depends_on:
       - kafka
-      - redis
+    networks:
+      - eras-network
 
-  # Audio Processing Service
   audio-processing:
     build:
-      context: ./services/audio-processing
-      dockerfile: Dockerfile
+      context: .
+      dockerfile: services/audio-processing/Dockerfile
+    container_name: eras-audio-processing
+    environment:
+      KAFKA_BOOTSTRAP_SERVERS: kafka:29092
+      KAFKA_CONSUMER_GROUP_ID: audio-processing-service
+    depends_on:
+      - kafka
+      - audio-ingestion
+    networks:
+      - eras-network
+
+  suggestion-engine:
+    build:
+      context: .
+      dockerfile: services/suggestion-engine/Dockerfile
+    container_name: eras-suggestion-engine
+    environment:
+      KAFKA_BOOTSTRAP_SERVERS: kafka:29092
+      KAFKA_CONSUMER_GROUP_ID: suggestion-engine-service
+    depends_on:
+      - kafka
+      - audio-processing
+    networks:
+      - eras-network
+
+  geospatial-dispatch:
+    build:
+      context: .
+      dockerfile: services/geospatial-dispatch/Dockerfile
+    container_name: eras-geospatial-dispatch
     ports:
       - "8002:8002"
     environment:
-      KAFKA_BROKER: kafka:9092
-      REDIS_HOST: redis
-      REDIS_PORT: 6379
+      KAFKA_BOOTSTRAP_SERVERS: kafka:29092
     depends_on:
-      - kafka
-      - redis
-
-  # AI Suggestion Engine
-  ai-suggestion-engine:
-    build:
-      context: ./services/ai-suggestion-engine
-      dockerfile: Dockerfile
-    ports:
-      - "8003:8003"
-    environment:
-      KAFKA_BROKER: kafka:9092
-      REDIS_HOST: redis
-      REDIS_PORT: 6379
-    depends_on:
-      - kafka
-      - redis
-
-  # Geospatial Dispatch Service
-  geospatial-dispatch:
-    build:
-      context: ./services/geospatial-dispatch
-      dockerfile: Dockerfile
-    ports:
-      - "8004:8004"
-    environment:
-      KAFKA_BROKER: kafka:9092
-      POSTGRES_HOST: postgres
-      POSTGRES_DB: eras_db
-      POSTGRES_USER: eras_user
-      POSTGRES_PASSWORD: eras_password
-      REDIS_HOST: redis
-      REDIS_PORT: 6379
-    depends_on:
-      - kafka
       - postgres
-      - redis
+    networks:
+      - eras-network
 
-  # Dashboard API
   dashboard-api:
     build:
-      context: ./services/dashboard-api
-      dockerfile: Dockerfile
+      context: .
+      dockerfile: services/dashboard-api/Dockerfile
+    container_name: eras-dashboard-api
     ports:
-      - "8005:8005"
+      - "8000:8000"
     environment:
-      KAFKA_BROKER: kafka:9092
-      POSTGRES_HOST: postgres
-      POSTGRES_DB: eras_db
-      POSTGRES_USER: eras_user
-      POSTGRES_PASSWORD: eras_password
-      REDIS_HOST: redis
-      REDIS_PORT: 6379
+      KAFKA_BOOTSTRAP_SERVERS: kafka:29092
+      KAFKA_CONSUMER_GROUP_ID: dashboard-api-service
+      GEOSPATIAL_DISPATCH_URL: http://geospatial-dispatch:8002
+      DATABASE_URL: postgresql://${POSTGRES_USER:-eras_user}:${POSTGRES_PASSWORD:-eras_pass}@postgres:5432/${POSTGRES_DB:-eras_db}
     depends_on:
       - kafka
       - postgres
-      - redis
+      - geospatial-dispatch
+    networks:
+      - eras-network
 
-  # Frontend
-  frontend:
-    build:
-      context: ./frontend
-      dockerfile: Dockerfile
-    ports:
-      - "3000:3000"
-    environment:
-      REACT_APP_API_URL: http://localhost:8005
-      REACT_APP_WS_URL: ws://localhost:8005
-    depends_on:
-      - dashboard-api
+networks:
+  eras-network:
+    driver: bridge
 
 volumes:
   postgres_data:
-  redis_data:
 

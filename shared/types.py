@@ -1,106 +1,49 @@
-"""Shared type definitions for ERAS services."""
-from typing import Optional, Dict, Any, List
-from datetime import datetime
-from enum import Enum
+"""
+Data models for ERAS system.
+"""
+
 from pydantic import BaseModel
-
-
-class IncidentType(str, Enum):
-    """Standard incident codes."""
-    ACCIDENT = "10-50"
-    FIRE = "10-70"
-    MEDICAL = "10-33"
-    POLICE = "10-13"
-    UNKNOWN = "10-99"
-
-
-class Severity(str, Enum):
-    """Incident severity levels."""
-    LOW = "low"
-    MEDIUM = "medium"
-    HIGH = "high"
-    CRITICAL = "critical"
-
-
-class VehicleStatus(str, Enum):
-    """Emergency vehicle status."""
-    AVAILABLE = "available"
-    DISPATCHED = "dispatched"
-    ON_SCENE = "on_scene"
-    RETURNING = "returning"
-    OFFLINE = "offline"
-
-
-class SuggestionType(str, Enum):
-    """Types of AI suggestions."""
-    INCIDENT_CODE = "incident_code"
-    SEVERITY = "severity"
-    VEHICLE = "vehicle"
-    ROUTE = "route"
-    ALERT = "alert"
+from typing import Optional
+from datetime import datetime
 
 
 class AudioChunk(BaseModel):
-    """Audio chunk data."""
+    """Represents a chunk of audio data."""
     session_id: str
-    chunk_id: str
-    audio_data: bytes
+    chunk_data: str  # Base64 encoded or path to audio file for MVP (mocked)
     timestamp: datetime
-    metadata: Optional[Dict[str, Any]] = None
+    sequence_number: int
 
 
-class ProcessedTranscript(BaseModel):
-    """Processed transcript with extracted information."""
+class Transcript(BaseModel):
+    """Represents a transcribed text from audio."""
     session_id: str
-    transcript: str
-    confidence: float
-    language: str = "en"
-    entities: Dict[str, Any] = {}
-    incident_type: Optional[IncidentType] = None
-    location: Optional[Dict[str, float]] = None  # {lat, lng}
-    severity: Optional[Severity] = None
+    text: str
     timestamp: datetime
 
 
-class AISuggestion(BaseModel):
-    """AI-generated suggestion."""
+class Suggestion(BaseModel):
+    """Represents an AI-generated suggestion for a dispatch action."""
     session_id: str
-    suggestion_id: str
-    type: SuggestionType
-    content: Dict[str, Any]
-    confidence: float
+    suggestion_type: str  # e.g., "incident_code", "alert", "vehicle"
+    value: str  # e.g., "10-70: Fire Alarm"
     timestamp: datetime
-    status: str = "pending"  # pending, accepted, declined, modified
+    status: str = "pending"  # "pending", "accepted", "declined", "modified"
 
 
 class Vehicle(BaseModel):
-    """Emergency vehicle representation."""
-    vehicle_id: str
-    vehicle_type: str  # ambulance, fire_truck, police_car
-    status: VehicleStatus
-    location: Dict[str, float]  # {lat, lng}
-    current_incident_id: Optional[str] = None
-    metadata: Optional[Dict[str, Any]] = None
+    """Represents an emergency vehicle."""
+    id: str
+    lat: float
+    lon: float
+    status: str  # "available", "dispatched", "offline"
+    vehicle_type: str  # "ambulance", "fire_truck", "police"
 
 
-class DispatchCommand(BaseModel):
-    """Dispatch command."""
-    command_id: str
+class AssignmentSuggestion(BaseModel):
+    """Represents a suggested vehicle assignment for an incident."""
     session_id: str
-    vehicle_id: str
-    incident_id: str
-    route: Optional[List[Dict[str, float]]] = None
+    suggested_vehicle_id: str
+    route: str 
     timestamp: datetime
-    status: str = "pending"
-
-
-class Session(BaseModel):
-    """Emergency call session."""
-    session_id: str
-    caller_info: Optional[Dict[str, Any]] = None
-    start_time: datetime
-    end_time: Optional[datetime] = None
-    status: str = "active"  # active, resolved, archived
-    incident_code: Optional[str] = None
-    dispatched_vehicles: List[str] = []
 

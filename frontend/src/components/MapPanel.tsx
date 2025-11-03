@@ -1,139 +1,148 @@
-import React, { useEffect, useRef, useState } from 'react'
-import { MapContainer, TileLayer, Marker, Popup, Polyline } from 'react-leaflet'
-import { LatLngExpression } from 'leaflet'
-import axios from 'axios'
+import { useEffect, useState } from 'react'
 import './MapPanel.css'
 
 interface Vehicle {
-  vehicle_id: string
-  vehicle_type: string
+  id: string
+  lat: number
+  lon: number
   status: string
-  location: { lat: number; lng: number }
+  vehicle_type: string
+}
+
+interface AssignmentSuggestion {
+  session_id: string
+  suggested_vehicle_id: string
+  route: string
+  timestamp: string
 }
 
 interface MapPanelProps {
   sessionId: string | null
 }
 
-const MapPanel: React.FC<MapPanelProps> = ({ sessionId }) => {
+const MapPanel = ({ sessionId }: MapPanelProps) => {
   const [vehicles, setVehicles] = useState<Vehicle[]>([])
-  const [incidentLocation, setIncidentLocation] = useState<LatLngExpression | null>(null)
-  const [route, setRoute] = useState<LatLngExpression[] | null>(null)
+  const [assignment, setAssignment] = useState<AssignmentSuggestion | null>(null)
 
   useEffect(() => {
-    fetchVehicles()
-    const interval = setInterval(fetchVehicles, 5000)
-    return () => clearInterval(interval)
+    // Fetch vehicles
+    const apiUrl = import.meta.env.VITE_API_URL || 'http://localhost:8000'
+    fetch(`${apiUrl}/vehicles`)
+      .then(res => res.json())
+      .then(data => {
+        setVehicles(data.vehicles || [])
+      })
+      .catch(err => console.error('Error fetching vehicles:', err))
   }, [])
 
   useEffect(() => {
     if (sessionId) {
-      fetchSessionIncidentLocation()
+      // Fetch assignment for selected session
+      const apiUrl = import.meta.env.VITE_API_URL || 'http://localhost:8000'
+      fetch(`${apiUrl}/sessions/${sessionId}/assignment`)
+        .then(res => {
+          if (res.ok) {
+            return res.json()
+          }
+          return null
+        })
+        .then(data => {
+          setAssignment(data)
+        })
+        .catch(err => {
+          console.error('Error fetching assignment:', err)
+          setAssignment(null)
+        })
+    } else {
+      setAssignment(null)
     }
   }, [sessionId])
 
-  const fetchVehicles = async () => {
-    try {
-      const response = await axios.get('http://localhost:8005/api/v1/vehicles')
-      setVehicles(response.data)
-    } catch (error) {
-      console.error('Error fetching vehicles:', error)
-    }
-  }
-
-  const fetchSessionIncidentLocation = async () => {
-    if (!sessionId) return
-    
-    try {
-      const response = await axios.get(`http://localhost:8005/api/v1/sessions/${sessionId}`)
-      const transcripts = response.data.transcripts || []
-      
-      // Get location from latest transcript
-      const latestTranscript = transcripts[transcripts.length - 1]
-      if (latestTranscript?.location) {
-        setIncidentLocation([latestTranscript.location.lat, latestTranscript.location.lng])
-      }
-      
-      // Get route from suggestions
-      const suggestions = response.data.suggestions || []
-      const routeSuggestion = suggestions.find((s: any) => s.type === 'route' && s.status === 'accepted')
-      if (routeSuggestion?.content?.route) {
-        const routeCoords = routeSuggestion.content.route.map((loc: any) => [loc.lat, loc.lng])
-        setRoute(routeCoords)
-      }
-    } catch (error) {
-      console.error('Error fetching session location:', error)
-    }
-  }
-
-  const getVehicleIconColor = (status: string) => {
-    switch (status) {
-      case 'available':
-        return 'green'
-      case 'dispatched':
-        return 'orange'
-      case 'on_scene':
-        return 'red'
-      default:
-        return 'gray'
-    }
-  }
-
-  const center: LatLngExpression = [43.4723, -80.5449] // Default center (waterloo)
-
   return (
     <div className="map-panel">
-      <div className="map-header">
-        <h3>Vehicle Map</h3>
-        <div className="vehicle-stats">
-          <span>Available: {vehicles.filter(v => v.status === 'available').length}</span>
-          <span>Dispatched: {vehicles.filter(v => v.status === 'dispatched').length}</span>
+      <div className="map-panel-header">
+        <h2>Map View</h2>
+        {sessionId && (
+          <span className="session-badge">Session: {sessionId.substring(0, 8)}...</span>
+        )}
+      </div>
+
+      <div className="map-container">
+        {/* Mocked map - placeholder */}
+        <div className="map-placeholder">
+          <div className="map-placeholder-content">
+            <div className="map-icon">🗺️</div>
+            <p>Map Visualization</p>
+            <p className="map-subtitle">(Mocked for MVP)</p>
+          </div>
+
+          {/* Vehicle markers overlay */}
+          <div className="vehicle-markers">
+            {vehicles.map(vehicle => {
+              // Mock positioning (in real implementation, would use actual lat/lon)
+              const x = 50 + (vehicle.lat - 43.45) * 1000
+              const y = 50 + (vehicle.lon + 80.52) * 1000
+              
+              return (
+                <div
+                  key={vehicle.id}
+                  className={`vehicle-marker vehicle-${vehicle.status}`}
+                  style={{
+                    left: `${Math.max(10, Math.min(90, x))}%`,
+                    top: `${Math.max(10, Math.min(90, y))}%`
+                  }}
+                  title={`${vehicle.id} (${vehicle.vehicle_type}) - ${vehicle.status}`}
+                >
+                  <div className="marker-dot"></div>
+                </div>
+              )
+            })}
+          </div>
         </div>
       </div>
-      
-      <div className="map-container">
-        <MapContainer
-          center={incidentLocation || center}
-          zoom={13}
-          style={{ height: '100%', width: '100%' }}
-        >
-          <TileLayer
-            url="https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png"
-            attribution='&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors'
-          />
-          
-          {/* Incident location marker */}
-          {incidentLocation && (
-            <Marker position={incidentLocation}>
-              <Popup>
-                <strong>Incident Location</strong>
-                <br />
-                {sessionId}
-              </Popup>
-            </Marker>
-          )}
-          
-          {/* Vehicle markers */}
-          {vehicles.map((vehicle) => (
-            <Marker
-              key={vehicle.vehicle_id}
-              position={[vehicle.location.lat, vehicle.location.lng]}
-            >
-              <Popup>
-                <strong>{vehicle.vehicle_id}</strong>
-                <br />
-                Type: {vehicle.vehicle_type}
-                <br />
-                Status: {vehicle.status}
-              </Popup>
-            </Marker>
-          ))}
-          
-          {/* Route polyline */}
-          {route && route.length > 1 && (
-            <Polyline positions={route} color="#6366f1" weight={3} />
-          )}
-        </MapContainer>
+
+      <div className="map-panel-sidebar">
+        <div className="vehicles-section">
+          <h3>Vehicles ({vehicles.length})</h3>
+          <div className="vehicles-list">
+            {vehicles.length === 0 ? (
+              <div className="empty-state">No vehicles available</div>
+            ) : (
+              vehicles.map(vehicle => (
+                <div key={vehicle.id} className={`vehicle-item vehicle-${vehicle.status}`}>
+                  <div className="vehicle-header">
+                    <span className="vehicle-id">{vehicle.id}</span>
+                    <span className={`vehicle-status status-${vehicle.status}`}>
+                      {vehicle.status}
+                    </span>
+                  </div>
+                  <div className="vehicle-info">
+                    <span className="vehicle-type">{vehicle.vehicle_type}</span>
+                    <span className="vehicle-location">
+                      {vehicle.lat.toFixed(4)}, {vehicle.lon.toFixed(4)}
+                    </span>
+                  </div>
+                </div>
+              ))
+            )}
+          </div>
+        </div>
+
+        {assignment && (
+          <div className="assignment-section">
+            <h3>Assignment</h3>
+            <div className="assignment-details">
+              <div className="assignment-item">
+                <span className="assignment-label">Vehicle:</span>
+                <span className="assignment-value">{assignment.suggested_vehicle_id}</span>
+              </div>
+              <div className="assignment-item">
+                <span className="assignment-label">Route:</span>
+                <span className="assignment-value">{assignment.route}</span>
+              </div>
+            </div>
+          </div>
+        )}
       </div>
     </div>
   )

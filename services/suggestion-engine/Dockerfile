@@ -6,11 +6,11 @@ WORKDIR /app
 COPY shared/ /app/shared/
 
 # Copy and install dependencies
-COPY services/audio-processing/requirements.txt /app/requirements.txt
+COPY services/suggestion-engine/requirements.txt /app/requirements.txt
 RUN pip install --no-cache-dir -r requirements.txt
 
 # Copy service code
-COPY services/audio-processing/main.py /app/main.py
+COPY services/suggestion-engine/main.py /app/main.py
 
 # Run the service
 CMD ["python", "main.py"]

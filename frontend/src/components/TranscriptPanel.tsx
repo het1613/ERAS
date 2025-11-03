@@ -1,127 +1,168 @@
-import React, { useState, useEffect, useRef } from 'react'
-import axios from 'axios'
-import SuggestionBubble from './SuggestionBubble'
+import { useEffect, useState } from 'react'
 import './TranscriptPanel.css'
 
 interface Transcript {
-  transcript_id: number
-  transcript: string
-  confidence: number
+  session_id: string
+  text: string
   timestamp: string
-  incident_type?: string
-  severity?: string
 }
 
 interface Suggestion {
-  suggestion_id: string
-  type: string
-  content: any
-  confidence: number
+  session_id: string
+  suggestion_type: string
+  value: string
   status: string
+  timestamp: string
 }
 
 interface TranscriptPanelProps {
-  sessionId: string | null
+  selectedSessionId: string | null
+  onSessionSelect: (sessionId: string | null) => void
 }
 
-const TranscriptPanel: React.FC<TranscriptPanelProps> = ({ sessionId }) => {
+const TranscriptPanel = ({ selectedSessionId, onSessionSelect }: TranscriptPanelProps) => {
   const [transcripts, setTranscripts] = useState<Transcript[]>([])
   const [suggestions, setSuggestions] = useState<Suggestion[]>([])
-  const [session, setSession] = useState<any>(null)
-  const transcriptEndRef = useRef<HTMLDivElement>(null)
+  const [sessions, setSessions] = useState<string[]>([])
+  const [connected, setConnected] = useState(false)
 
   useEffect(() => {
-    if (sessionId) {
-      fetchSessionData()
-      const interval = setInterval(fetchSessionData, 2000)
-      return () => clearInterval(interval)
+    // Connect to WebSocket
+    const apiUrl = import.meta.env.VITE_API_URL || 'http://localhost:8000'
+    const wsUrl = apiUrl.replace(/^http/, 'ws') + '/ws'
+    const ws = new WebSocket(wsUrl)
+
+    ws.onopen = () => {
+      setConnected(true)
+      console.log('WebSocket connected')
     }
-  }, [sessionId])
 
-  useEffect(() => {
-    // Auto-scroll to bottom
-    transcriptEndRef.current?.scrollIntoView({ behavior: 'smooth' })
-  }, [transcripts])
-
-  const fetchSessionData = async () => {
-    if (!sessionId) return
-    
-    try {
-      const response = await axios.get(`http://localhost:8005/api/v1/sessions/${sessionId}`)
-      setSession(response.data.session)
-      setTranscripts(response.data.transcripts || [])
-      setSuggestions(response.data.suggestions || [])
-    } catch (error) {
-      console.error('Error fetching session data:', error)
+    ws.onmessage = (event) => {
+      try {
+        const message = JSON.parse(event.data)
+        
+        if (message.type === 'transcript') {
+          const transcript = message.data as Transcript
+          setTranscripts(prev => {
+            const updated = [...prev, transcript]
+            // Update sessions list
+            if (!sessions.includes(transcript.session_id)) {
+              setSessions(prev => [...prev, transcript.session_id])
+            }
+            return updated
+          })
+        } else if (message.type === 'suggestion') {
+          const suggestion = message.data as Suggestion
+          setSuggestions(prev => {
+            const updated = [...prev, suggestion]
+            return updated
+          })
+        }
+      } catch (error) {
+        console.error('Error parsing WebSocket message:', error)
+      }
     }
-  }
 
-  const handleSuggestionAction = async (suggestionId: string, action: string) => {
-    try {
-      await axios.post(`http://localhost:8005/api/v1/suggestions/${suggestionId}/action`, {
-        action
+    ws.onerror = (error) => {
+      console.error('WebSocket error:', error)
+      setConnected(false)
+    }
+
+    ws.onclose = () => {
+      setConnected(false)
+      console.log('WebSocket disconnected')
+    }
+
+    // Fetch existing sessions on mount
+    const apiUrl = import.meta.env.VITE_API_URL || 'http://localhost:8000'
+    fetch(`${apiUrl}/sessions`)
+      .then(res => res.json())
+      .then(data => {
+        const sessionIds = data.sessions.map((s: any) => s.session_id)
+        setSessions(sessionIds)
       })
-      fetchSessionData()
-    } catch (error) {
-      console.error('Error handling suggestion action:', error)
-    }
-  }
+      .catch(err => console.error('Error fetching sessions:', err))
 
-  if (!sessionId) {
-    return (
-      <div className="transcript-panel">
-        <div className="empty-state">Select a session to view transcripts</div>
-      </div>
-    )
-  }
+    return () => {
+      ws.close()
+    }
+  }, [])
+
+  const filteredTranscripts = selectedSessionId
+    ? transcripts.filter(t => t.session_id === selectedSessionId)
+    : transcripts
+
+  const filteredSuggestions = selectedSessionId
+    ? suggestions.filter(s => s.session_id === selectedSessionId)
+    : suggestions
 
   return (
     <div className="transcript-panel">
-      <div className="transcript-header">
-        <h3>Call Transcript</h3>
-        <div className="session-info">
-          {session?.incident_code && (
-            <span className="incident-badge">{session.incident_code}</span>
-          )}
-          <span className={`status-badge ${session?.status}`}>{session?.status}</span>
+      <div className="transcript-panel-header">
+        <h2>Transcripts & Suggestions</h2>
+        <div className={`connection-status ${connected ? 'connected' : 'disconnected'}`}>
+          {connected ? '● Connected' : '○ Disconnected'}
         </div>
       </div>
       
-      <div className="transcript-content">
-        {transcripts.map((transcript) => (
-          <div key={transcript.transcript_id} className="transcript-item">
-            <div className="transcript-meta">
-              <span className="timestamp">
-                {new Date(transcript.timestamp).toLocaleTimeString()}
-              </span>
-              <span className="confidence">{(transcript.confidence * 100).toFixed(0)}%</span>
-            </div>
-            <div className="transcript-text">{transcript.transcript}</div>
-            {transcript.incident_type && (
-              <div className="transcript-tags">
-                <span className="tag incident">{transcript.incident_type}</span>
-                {transcript.severity && (
-                  <span className={`tag severity ${transcript.severity}`}>
-                    {transcript.severity}
-                  </span>
-                )}
-              </div>
+      <div className="transcript-panel-sessions">
+        <div className="session-list">
+          <button
+            className={`session-button ${!selectedSessionId ? 'active' : ''}`}
+            onClick={() => onSessionSelect(null)}
+          >
+            All Sessions
+          </button>
+          {sessions.map(sessionId => (
+            <button
+              key={sessionId}
+              className={`session-button ${selectedSessionId === sessionId ? 'active' : ''}`}
+              onClick={() => onSessionSelect(sessionId)}
+            >
+              {sessionId.substring(0, 8)}...
+            </button>
+          ))}
+        </div>
+      </div>
+
+      <div className="transcript-panel-content">
+        <div className="transcripts-section">
+          <h3>Transcripts</h3>
+          <div className="transcripts-list">
+            {filteredTranscripts.length === 0 ? (
+              <div className="empty-state">No transcripts yet</div>
+            ) : (
+              filteredTranscripts.map((transcript, idx) => (
+                <div key={idx} className="transcript-item">
+                  <div className="transcript-meta">
+                    <span className="session-id">{transcript.session_id.substring(0, 8)}...</span>
+                    <span className="timestamp">{new Date(transcript.timestamp).toLocaleTimeString()}</span>
+                  </div>
+                  <div className="transcript-text">{transcript.text}</div>
+                </div>
+              ))
             )}
           </div>
-        ))}
-        
-        {/* Render suggestions inline */}
-        {suggestions
-          .filter(s => s.status === 'pending')
-          .map((suggestion) => (
-            <SuggestionBubble
-              key={suggestion.suggestion_id}
-              suggestion={suggestion}
-              onAction={(action) => handleSuggestionAction(suggestion.suggestion_id, action)}
-            />
-          ))}
-        
-        <div ref={transcriptEndRef} />
+        </div>
+
+        <div className="suggestions-section">
+          <h3>AI Suggestions</h3>
+          <div className="suggestions-list">
+            {filteredSuggestions.length === 0 ? (
+              <div className="empty-state">No suggestions yet</div>
+            ) : (
+              filteredSuggestions.map((suggestion, idx) => (
+                <div key={idx} className={`suggestion-item suggestion-${suggestion.status}`}>
+                  <div className="suggestion-header">
+                    <span className="suggestion-type">{suggestion.suggestion_type}</span>
+                    <span className="suggestion-status">{suggestion.status}</span>
+                  </div>
+                  <div className="suggestion-value">{suggestion.value}</div>
+                </div>
+              ))
+            )}
+          </div>
+        </div>
       </div>
     </div>
   )

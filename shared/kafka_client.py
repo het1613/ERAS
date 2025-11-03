@@ -1,50 +1,84 @@
-"""Kafka producer and consumer utilities."""
-import json
+"""
+Kafka client utilities for ERAS services.
+"""
+
 import os
-from typing import Optional, Callable
+import json
+from typing import List, Optional
 from kafka import KafkaProducer, KafkaConsumer
-from kafka.errors import KafkaError
 
 
-KAFKA_BROKER = os.getenv("KAFKA_BROKER", "localhost:9092")
-
-
-def create_producer() -> KafkaProducer:
-    """Create a Kafka producer."""
+def create_producer(
+    bootstrap_servers: Optional[str] = None,
+    value_serializer=None
+) -> KafkaProducer:
+    """
+    Create and return a Kafka producer instance.
+    
+    Args:
+        bootstrap_servers: Kafka broker address (defaults to env var or localhost:9092)
+        value_serializer: Serializer function (defaults to JSON)
+    
+    Returns:
+        KafkaProducer instance
+    """
+    if bootstrap_servers is None:
+        bootstrap_servers = os.getenv(
+            "KAFKA_BOOTSTRAP_SERVERS", 
+            "localhost:9092"
+        )
+    
+    if value_serializer is None:
+        value_serializer = lambda v: json.dumps(v).encode('utf-8')
+    
     return KafkaProducer(
-        bootstrap_servers=KAFKA_BROKER,
-        value_serializer=lambda v: json.dumps(v).encode('utf-8'),
-        key_serializer=lambda k: k.encode('utf-8') if k else None
+        bootstrap_servers=bootstrap_servers,
+        value_serializer=value_serializer,
+        api_version=(0, 10, 1),
+        retries=3,
+        acks='all',
     )
 
 
-def publish_message(producer: KafkaProducer, topic: str, message: dict, key: Optional[str] = None):
-    """Publish a message to a Kafka topic."""
-    try:
-        future = producer.send(topic, value=message, key=key)
-        future.get(timeout=10)
-    except KafkaError as e:
-        print(f"Error publishing to {topic}: {e}")
-        raise
-
-
-def create_consumer(topic: str, group_id: str) -> KafkaConsumer:
-    """Create a Kafka consumer."""
+def create_consumer(
+    topics: List[str],
+    group_id: Optional[str] = None,
+    bootstrap_servers: Optional[str] = None,
+    value_deserializer=None,
+    auto_offset_reset: str = "earliest"
+) -> KafkaConsumer:
+    """
+    Create and return a Kafka consumer instance.
+    
+    Args:
+        topics: List of topic names to subscribe to
+        group_id: Consumer group ID (required for proper offset management)
+        bootstrap_servers: Kafka broker address (defaults to env var or localhost:9092)
+        value_deserializer: Deserializer function (defaults to JSON)
+        auto_offset_reset: What to do when there is no initial offset ('earliest' or 'latest')
+    
+    Returns:
+        KafkaConsumer instance
+    """
+    if bootstrap_servers is None:
+        bootstrap_servers = os.getenv(
+            "KAFKA_BOOTSTRAP_SERVERS",
+            "localhost:9092"
+        )
+    
+    if value_deserializer is None:
+        value_deserializer = lambda m: json.loads(m.decode('utf-8'))
+    
+    if group_id is None:
+        group_id = os.getenv("KAFKA_CONSUMER_GROUP_ID", "eras-default-group")
+    
     return KafkaConsumer(
-        topic,
-        bootstrap_servers=KAFKA_BROKER,
+        *topics,
+        bootstrap_servers=bootstrap_servers,
         group_id=group_id,
-        value_deserializer=lambda m: json.loads(m.decode('utf-8')),
-        auto_offset_reset='earliest',
-        enable_auto_commit=True
+        value_deserializer=value_deserializer,
+        auto_offset_reset=auto_offset_reset,
+        enable_auto_commit=True,
+        api_version=(0, 10, 1),
     )
-
-
-def consume_messages(consumer: KafkaConsumer, callback: Callable[[dict], None]):
-    """Consume messages from a topic and call callback for each."""
-    for message in consumer:
-        try:
-            callback(message.value)
-        except Exception as e:
-            print(f"Error processing message: {e}")
 

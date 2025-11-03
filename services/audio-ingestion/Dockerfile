@@ -1,18 +1,20 @@
-FROM python:3.11-slim
+FROM python:3.10-slim
 
 WORKDIR /app
 
-# Copy shared modules first
-COPY ../../shared /app/shared
+# Copy shared utilities (will be copied from project root context)
+COPY shared/ /app/shared/
 
-# Copy requirements
-COPY requirements.txt .
+# Copy and install dependencies
+COPY services/audio-ingestion/requirements.txt /app/requirements.txt
 RUN pip install --no-cache-dir -r requirements.txt
 
 # Copy service code
-COPY . .
+COPY services/audio-ingestion/main.py /app/main.py
 
+# Expose port
 EXPOSE 8001
 
+# Run the service
 CMD ["python", "main.py"]
 
