@@ -1,0 +1,108 @@
+.dashboard {
+  width: 100%;
+  height: 100vh;
+  display: flex;
+  flex-direction: column;
+  background: #0a0e27;
+  color: #e0e0e0;
+}
+
+.dashboard-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 1rem 2rem;
+  background: #1a1f3a;
+  border-bottom: 1px solid #2a2f4a;
+}
+
+.dashboard-header h1 {
+  font-size: 1.5rem;
+  font-weight: 600;
+}
+
+.connection-status {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+}
+
+.status-indicator {
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+  background: #ef4444;
+}
+
+.status-indicator.connected {
+  background: #10b981;
+}
+
+.dashboard-content {
+  display: flex;
+  flex: 1;
+  overflow: hidden;
+}
+
+.sessions-sidebar {
+  width: 250px;
+  background: #1a1f3a;
+  border-right: 1px solid #2a2f4a;
+  padding: 1rem;
+  overflow-y: auto;
+}
+
+.sessions-sidebar h2 {
+  font-size: 1rem;
+  margin-bottom: 1rem;
+  color: #a0a0a0;
+}
+
+.sessions-list {
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+}
+
+.session-item {
+  padding: 0.75rem;
+  background: #2a2f4a;
+  border-radius: 4px;
+  cursor: pointer;
+  transition: background 0.2s;
+}
+
+.session-item:hover {
+  background: #3a3f5a;
+}
+
+.session-item.active {
+  background: #4a5f7a;
+  border: 1px solid #5a7f9a;
+}
+
+.session-id {
+  font-weight: 600;
+  margin-bottom: 0.25rem;
+}
+
+.session-status {
+  font-size: 0.875rem;
+  color: #a0a0a0;
+  text-transform: capitalize;
+}
+
+.incident-code {
+  font-size: 0.75rem;
+  color: #10b981;
+  margin-top: 0.25rem;
+}
+
+.main-panel {
+  flex: 1;
+  display: flex;
+  gap: 1rem;
+  padding: 1rem;
+  overflow: hidden;
+}
+

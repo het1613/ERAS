@@ -1,0 +1,137 @@
+.transcript-panel {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  background: #1a1f3a;
+  border-radius: 8px;
+  overflow: hidden;
+}
+
+.transcript-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 1rem;
+  background: #2a2f4a;
+  border-bottom: 1px solid #3a3f5a;
+}
+
+.transcript-header h3 {
+  font-size: 1.125rem;
+  font-weight: 600;
+}
+
+.session-info {
+  display: flex;
+  gap: 0.5rem;
+}
+
+.incident-badge {
+  padding: 0.25rem 0.5rem;
+  background: #10b981;
+  color: #fff;
+  border-radius: 4px;
+  font-size: 0.875rem;
+  font-weight: 600;
+}
+
+.status-badge {
+  padding: 0.25rem 0.5rem;
+  background: #3a3f5a;
+  border-radius: 4px;
+  font-size: 0.875rem;
+  text-transform: capitalize;
+}
+
+.status-badge.active {
+  background: #10b981;
+}
+
+.status-badge.resolved {
+  background: #6b7280;
+}
+
+.transcript-content {
+  flex: 1;
+  overflow-y: auto;
+  padding: 1rem;
+  display: flex;
+  flex-direction: column;
+  gap: 1rem;
+}
+
+.transcript-item {
+  background: #2a2f4a;
+  padding: 1rem;
+  border-radius: 8px;
+  border-left: 3px solid #4a5f7a;
+}
+
+.transcript-meta {
+  display: flex;
+  justify-content: space-between;
+  margin-bottom: 0.5rem;
+  font-size: 0.875rem;
+  color: #a0a0a0;
+}
+
+.timestamp {
+  font-weight: 500;
+}
+
+.confidence {
+  color: #10b981;
+}
+
+.transcript-text {
+  line-height: 1.6;
+  margin-bottom: 0.5rem;
+}
+
+.transcript-tags {
+  display: flex;
+  gap: 0.5rem;
+  margin-top: 0.5rem;
+}
+
+.tag {
+  padding: 0.25rem 0.5rem;
+  border-radius: 4px;
+  font-size: 0.75rem;
+  font-weight: 600;
+}
+
+.tag.incident {
+  background: #4a5f7a;
+  color: #fff;
+}
+
+.tag.severity {
+  background: #3a3f5a;
+}
+
+.tag.severity.low {
+  background: #10b981;
+}
+
+.tag.severity.medium {
+  background: #f59e0b;
+}
+
+.tag.severity.high {
+  background: #ef4444;
+}
+
+.tag.severity.critical {
+  background: #dc2626;
+}
+
+.empty-state {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  height: 100%;
+  color: #6b7280;
+  font-size: 1.125rem;
+}
+

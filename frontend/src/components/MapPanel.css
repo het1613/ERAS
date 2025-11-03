@@ -1,0 +1,39 @@
+.map-panel {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  background: #1a1f3a;
+  border-radius: 8px;
+  overflow: hidden;
+}
+
+.map-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 1rem;
+  background: #2a2f4a;
+  border-bottom: 1px solid #3a3f5a;
+}
+
+.map-header h3 {
+  font-size: 1.125rem;
+  font-weight: 600;
+}
+
+.vehicle-stats {
+  display: flex;
+  gap: 1rem;
+  font-size: 0.875rem;
+  color: #a0a0a0;
+}
+
+.map-container {
+  flex: 1;
+  position: relative;
+}
+
+.map-container .leaflet-container {
+  background: #1a1f3a;
+}
+
