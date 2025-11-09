@@ -6,6 +6,7 @@ import os
 import logging
 import sys
 import asyncio
+import threading
 from datetime import datetime
 from typing import Dict, List
 from collections import defaultdict
@@ -77,6 +78,9 @@ manager = ConnectionManager()
 
 # Service URLs (from docker-compose network)
 GEOSPATIAL_DISPATCH_URL = os.getenv("GEOSPATIAL_DISPATCH_URL", "http://geospatial-dispatch:8002")
+
+# Store event loop reference for use in Kafka consumer thread
+event_loop = None
 
 
 @app.get("/health")
@@ -234,13 +238,19 @@ def process_transcript_message(message_value: dict):
         
         logger.info(f"Processed transcript for session: {session_id}")
         
-        # Broadcast to WebSocket clients
+        # Broadcast to WebSocket clients (schedule in event loop)
         transcript_dict = transcript.model_dump()
         transcript_dict['timestamp'] = transcript_dict['timestamp'].isoformat()
-        asyncio.create_task(manager.broadcast({
-            "type": "transcript",
-            "data": transcript_dict
-        }))
+        # Use asyncio.run_coroutine_threadsafe to schedule from thread
+        global event_loop
+        if event_loop and event_loop.is_running():
+            asyncio.run_coroutine_threadsafe(
+                manager.broadcast({
+                    "type": "transcript",
+                    "data": transcript_dict
+                }),
+                event_loop
+            )
         
     except Exception as e:
         logger.error(f"Error processing transcript message: {e}", exc_info=True)
@@ -261,20 +271,26 @@ def process_suggestion_message(message_value: dict):
         
         logger.info(f"Processed suggestion for session: {session_id}")
         
-        # Broadcast to WebSocket clients
+        # Broadcast to WebSocket clients (schedule in event loop)
         suggestion_dict = suggestion.model_dump()
         suggestion_dict['timestamp'] = suggestion_dict['timestamp'].isoformat()
-        asyncio.create_task(manager.broadcast({
-            "type": "suggestion",
-            "data": suggestion_dict
-        }))
+        # Use asyncio.run_coroutine_threadsafe to schedule from thread
+        global event_loop
+        if event_loop and event_loop.is_running():
+            asyncio.run_coroutine_threadsafe(
+                manager.broadcast({
+                    "type": "suggestion",
+                    "data": suggestion_dict
+                }),
+                event_loop
+            )
         
     except Exception as e:
         logger.error(f"Error processing suggestion message: {e}", exc_info=True)
 
 
-async def kafka_consumer_task():
-    """Background task to consume from Kafka and process messages."""
+def kafka_consumer_thread():
+    """Run Kafka consumer in a separate thread to avoid blocking the event loop."""
     bootstrap_servers = os.getenv("KAFKA_BOOTSTRAP_SERVERS", "kafka:29092")
     
     logger.info(f"Starting Kafka consumer. Connecting to: {bootstrap_servers}")
@@ -304,12 +320,21 @@ async def kafka_consumer_task():
                 
     except Exception as e:
         logger.error(f"Fatal error in Kafka consumer: {e}", exc_info=True)
+    finally:
+        if 'consumer' in locals():
+            consumer.close()
 
 
 @app.on_event("startup")
 async def startup_event():
     """Start background tasks on application startup."""
-    asyncio.create_task(kafka_consumer_task())
+    # Store event loop reference for use in Kafka consumer thread
+    global event_loop
+    event_loop = asyncio.get_event_loop()
+    
+    # Start Kafka consumer in a separate thread to avoid blocking the event loop
+    kafka_thread = threading.Thread(target=kafka_consumer_thread, daemon=True)
+    kafka_thread.start()
     logger.info("Dashboard API Service started")
 
 

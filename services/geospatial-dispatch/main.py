@@ -137,7 +137,7 @@ def generate_route(vehicle: Vehicle, incident_lat: float, incident_lon: float) -
     """
     # TODO: Use a routing API (e.g., Google Maps, OSRM).
     distance = calculate_distance(vehicle.lat, vehicle.lon, incident_lat, incident_lon)
-    return f"Route from {vehicle.current_location} to incident (approx {distance:.1f} km)"
+    return f"Route from ({vehicle.lat:.4f}, {vehicle.lon:.4f}) to incident ({incident_lat:.4f}, {incident_lon:.4f}) (approx {distance:.1f} km)"
 
 
 @app.get("/health")

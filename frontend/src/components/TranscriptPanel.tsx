@@ -26,6 +26,59 @@ const TranscriptPanel = ({ selectedSessionId, onSessionSelect }: TranscriptPanel
   const [sessions, setSessions] = useState<string[]>([])
   const [connected, setConnected] = useState(false)
 
+  // Fetch all existing data on mount
+  useEffect(() => {
+    const apiUrl = import.meta.env.VITE_API_URL || 'http://localhost:8000'
+    
+    // Fetch transcripts and suggestions for all sessions
+    const fetchAllData = async () => {
+      try {
+        const sessionsResponse = await fetch(`${apiUrl}/sessions`)
+        const sessionsData = await sessionsResponse.json()
+        const sessionIds = sessionsData.sessions.map((s: any) => s.session_id)
+        
+        // Update sessions list
+        setSessions(sessionIds)
+        
+        if (sessionIds.length === 0) {
+          return
+        }
+        
+        // Fetch transcripts and suggestions for each session
+        const transcriptsPromises = sessionIds.map((sessionId: string) =>
+          fetch(`${apiUrl}/sessions/${sessionId}/transcript`)
+            .then(res => res.json())
+            .then(data => data.transcripts || [])
+            .catch(err => {
+              console.error(`Error fetching transcripts for session ${sessionId}:`, err)
+              return []
+            })
+        )
+        
+        const suggestionsPromises = sessionIds.map((sessionId: string) =>
+          fetch(`${apiUrl}/sessions/${sessionId}/suggestions`)
+            .then(res => res.json())
+            .then(data => data.suggestions || [])
+            .catch(err => {
+              console.error(`Error fetching suggestions for session ${sessionId}:`, err)
+              return []
+            })
+        )
+        
+        const allTranscripts = await Promise.all(transcriptsPromises)
+        const allSuggestions = await Promise.all(suggestionsPromises)
+        
+        // Flatten arrays and set state
+        setTranscripts(allTranscripts.flat())
+        setSuggestions(allSuggestions.flat())
+      } catch (error) {
+        console.error('Error fetching initial data:', error)
+      }
+    }
+    
+    fetchAllData()
+  }, []) // Run once on mount
+
   useEffect(() => {
     // Connect to WebSocket
     const apiUrl = import.meta.env.VITE_API_URL || 'http://localhost:8000'
@@ -44,18 +97,35 @@ const TranscriptPanel = ({ selectedSessionId, onSessionSelect }: TranscriptPanel
         if (message.type === 'transcript') {
           const transcript = message.data as Transcript
           setTranscripts(prev => {
-            const updated = [...prev, transcript]
-            // Update sessions list
-            if (!sessions.includes(transcript.session_id)) {
-              setSessions(prev => [...prev, transcript.session_id])
+            // Check if transcript already exists (avoid duplicates)
+            const exists = prev.some(t => 
+              t.session_id === transcript.session_id && 
+              t.text === transcript.text && 
+              t.timestamp === transcript.timestamp
+            )
+            if (exists) return prev
+            
+            return [...prev, transcript]
+          })
+          // Update sessions list
+          setSessions(prev => {
+            if (!prev.includes(transcript.session_id)) {
+              return [...prev, transcript.session_id]
             }
-            return updated
+            return prev
           })
         } else if (message.type === 'suggestion') {
           const suggestion = message.data as Suggestion
           setSuggestions(prev => {
-            const updated = [...prev, suggestion]
-            return updated
+            // Check if suggestion already exists (avoid duplicates)
+            const exists = prev.some(s => 
+              s.session_id === suggestion.session_id && 
+              s.suggestion_type === suggestion.suggestion_type && 
+              s.value === suggestion.value && 
+              s.timestamp === suggestion.timestamp
+            )
+            if (exists) return prev
+            return [...prev, suggestion]
           })
         }
       } catch (error) {
@@ -72,16 +142,6 @@ const TranscriptPanel = ({ selectedSessionId, onSessionSelect }: TranscriptPanel
       setConnected(false)
       console.log('WebSocket disconnected')
     }
-
-    // Fetch existing sessions on mount
-    const apiUrl = import.meta.env.VITE_API_URL || 'http://localhost:8000'
-    fetch(`${apiUrl}/sessions`)
-      .then(res => res.json())
-      .then(data => {
-        const sessionIds = data.sessions.map((s: any) => s.session_id)
-        setSessions(sessionIds)
-      })
-      .catch(err => console.error('Error fetching sessions:', err))
 
     return () => {
       ws.close()

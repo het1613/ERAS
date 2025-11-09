@@ -13,6 +13,7 @@ The system consists of **5 Python microservices**, **1 React frontend**, and sup
 1. **Audio Ingestion Service** (`services/audio-ingestion/`)
    - Receives audio file uploads from dispatchers
    - Chunks and publishes audio data to Kafka
+   - Port: `8001`
 
 2. **Audio Processing Service** (`services/audio-processing/`)
    - Consumes audio chunks from Kafka
@@ -69,6 +70,16 @@ WebSocket → Frontend Dashboard
     ↓
 Geospatial Dispatch Service (for vehicle assignments)
 ```
+
+### Kafka Topics
+
+The system uses the following Kafka topics for event-driven communication:
+
+- **`audio-chunks`**: Raw audio data chunks published by Audio Ingestion Service
+- **`transcripts`**: Transcribed text from Audio Processing Service
+- **`suggestions`**: AI-generated suggestions from Suggestion Engine
+
+Topics are automatically created when messages are first published (via `KAFKA_AUTO_CREATE_TOPICS_ENABLE: "true"`).
 
 
 ### Project Structure
@@ -211,6 +222,26 @@ docker-compose down -v
 ### Audio Ingestion (`http://localhost:8001`)
 - `GET /health` - Health check
 - `POST /ingest` - Upload audio file (multipart/form-data)
+  
+  **Example:**
+  ```bash
+  # Test with a text file
+  curl -X POST http://localhost:8001/ingest \
+    -F "file=@/path/to/your/file.txt"
+  
+  # Test with an audio file
+  curl -X POST http://localhost:8001/ingest \
+    -F "file=@/path/to/your/audio.wav"
+  
+  **Response:**
+  ```json
+  {
+    "session_id": "uuid-here",
+    "status": "ingested",
+    "filename": "file.txt",
+    "size": 123
+  }
+  ```
 
 ### Geospatial Dispatch (`http://localhost:8002`)
 - `GET /health` - Health check
