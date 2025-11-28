@@ -1,0 +1,240 @@
+/* --- BASE STYLES --- */
+.dispatch-panel {
+    width: 390px;
+    height: 100vh;
+    overflow-y: auto;
+    border-right: 1px solid #e5e5e5;
+    background: #ffffff;
+    display: flex;
+    flex-direction: column;
+    font-family: -apple-system, BlinkMacSystemFont, sans-serif;
+}
+
+.top-nav {
+    position: sticky;
+    padding: 20px;
+    padding-bottom: 0px;
+    top: 0;
+    background: #ffffff;
+    z-index: 10;
+}
+
+.panel-title {
+    font-size: 32px;
+    font-weight: 800;
+    margin-bottom: 20px;
+    display: flex;
+    align-items: center;
+    gap: 8px;
+}
+
+.section-title {
+    font-size: 20px;
+    font-weight: 700;
+    margin-bottom: 14px;
+}
+
+/* FILTER BUTTONS */
+.status-filters {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 10px;
+    margin-bottom: 24px;
+}
+
+.filter {
+    padding: 8px 14px;
+    border-radius: 12px;
+    border: 1px solid #dcdcdc;
+    background: #f8f8f8;
+    cursor: pointer;
+    font-size: 15px;
+    font-weight: 500;
+}
+
+/* Case Filter Colors - Text only */
+.filter.purple-text { color: #884dff; }
+.filter.red-text { color: #d6455d; }
+.filter.orange-text { color: #e29a00; }
+.filter.yellow-text { color: #d4a700; }
+.filter.green-text { color: #2e994e; }
+.filter.all { color: #444; }
+
+
+/* --- ACTIVE CASES SECTION --- */
+.active-cases {
+    padding: 20px;
+    padding-top: 0px;
+}
+
+.case-list {
+    display: flex;
+    flex-direction: column;
+    gap: 18px;
+}
+
+/* 1. Case Card Base */
+.case-card {
+    background: white;
+    border-radius: 18px;
+    padding: 20px;
+    box-shadow: 0 3px 8px rgba(0, 0, 0, 0.08);
+    border: 1px solid #f0f0f0;
+    position: relative; /* CRITICAL: Reference for absolute children */
+}
+
+/* 2. Header Visuals (Title + Bar/Square) */
+.case-header-visuals {
+    margin-bottom: 20px; 
+}
+
+.case-type {
+    font-weight: 700;
+    font-size: 20px; 
+    color: #222;
+    position: relative; 
+    z-index: 2; /* Ensure title is above the bar */
+}
+
+/* 3. Bar Container */
+.priority-bars-container {
+    position: relative;
+    width: 100%;
+    height: 10px;
+    margin-top: 8px; /* Space between title and bar */
+}
+
+/* 4. Long Bar */
+.priority-bar {
+    position: absolute;
+    top: 0;
+    left: 0;
+    width: 85%; /* Long bar width */
+    height: 10px;
+    border-radius: 4px;
+    z-index: 1; 
+}
+
+/* 5. Right Square */
+.priority-square {
+    position: absolute;
+    top: 0;
+    right: 0;
+    width: 10px; 
+    height: 10px;
+    border-radius: 4px;
+    z-index: 1; 
+}
+
+/* Bar/Square Colors */
+.priority-bar-purple, .priority-square-purple { background-color: #884dff; }
+.priority-bar-red, .priority-square-red { background-color: #d6455d; }
+.priority-bar-orange, .priority-square-orange { background-color: #ff9d38; } 
+.priority-bar-yellow, .priority-square-yellow { background-color: #ffce38; } 
+.priority-bar-green, .priority-square-green { background-color: #33d067; } 
+
+/* 6. Case Details Content (Location/Time) */
+.case-details-content {
+    position: relative; 
+    z-index: 2;
+}
+
+/* Case Rows */
+.case-row {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    margin-bottom: 6px;
+    color: #444;
+    font-size: 16px;
+}
+
+/* Priority Dot */
+.priority-dot {
+    width: 10px;
+    height: 10px;
+    border-radius: 50%;
+    margin-right: 4px;
+    position: relative;
+    z-index: 3;
+}
+
+/* Priority Text */
+.case-priority {
+    font-size: 16px;
+    font-weight: 600;
+}
+
+/* Priority Colors for Dots and Text */
+.priority-purple { background: #884dff; color: #884dff; }
+.priority-red { background: #d6455d; color: #d6455d; }
+.priority-orange { background: #ff9d38; color: #e29a00; }
+.priority-yellow { background: #ffce38; color: #d4a700; }
+.priority-green { background: #33d067; color: #2e994e; }
+
+
+/* 7. Warning Icon Styling (Absolute Positioning) */
+.warning-icon {
+    position: absolute;
+    top: 20px; 
+    right: 20px;
+    z-index: 3; /* Ensure icon is on top */
+}
+
+.priority-icon {
+    line-height: 1;
+}
+
+/* MDI Icon Font Styling (Required for the 'warning' icon) */
+.mdi-icon {
+    font-family: 'Material Icons', sans-serif; 
+    font-weight: normal;
+    font-style: normal;
+    font-size: 24px;
+    display: inline-block;
+    line-height: 1;
+    text-transform: none;
+    letter-spacing: normal;
+    word-wrap: normal;
+    white-space: nowrap;
+    direction: ltr;
+
+    -webkit-font-smoothing: antialiased;
+    text-rendering: optimizeLegibility;
+    -moz-osx-font-smoothing: grayscale;
+    -webkit-font-feature-settings: 'liga';
+            font-feature-settings: 'liga';
+}
+
+.priority-icon .mdi-icon {
+    font-size: 38px; 
+    vertical-align: middle; 
+}
+
+
+/* --- BOTTOM NAV --- */
+.bottom-nav {
+    position: sticky;
+    bottom: 0;
+    background: white;
+    padding-top: 14px;
+    padding-bottom: 14px;
+    border-top: 1px solid #ddd;
+    z-index: 10;
+    display: flex;
+    justify-content: space-around;
+}
+
+.nav-item {
+    flex: 1;
+    padding: 12px 0;
+    background: none;
+    border: none;
+    cursor: pointer;
+    font-size: 18px;
+}
+
+.nav-item.active {
+    font-weight: 700;
+    color: #007aff;
+}
