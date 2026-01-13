@@ -1,31 +1,10 @@
+// CasesPanel.tsx
 import React from "react";
 import "./CasePanel.css";
+import CaseCard from "./CaseCard"; // <--- IMPORT THE NEW COMPONENT
+import { CaseInfo, CasePriority } from "./types"; // <--- IMPORT SHARED TYPES
 
-// --- Type Definitions ---
-export type CasePriority = "Purple" | "Red" | "Orange" | "Yellow" | "Green";
-
-interface CaseInfo {
-	id: string;
-	priority: CasePriority;
-	type: string;
-	location: string;
-	reportedTime: string;
-}
-
-type PriorityCounts = {
-	[key in CasePriority]?: number;
-};
-
-// Map priorities to a display color for buttons
-const priorityColorMap: Record<CasePriority, string> = {
-	Purple: "purple-text",
-	Red: "red-text",
-	Orange: "orange-text",
-	Yellow: "yellow-text",
-	Green: "green-text",
-};
-
-// --- Mock Data ---
+// --- Mock Data (Stays here because the parent manages the list) ---
 const mockCases: CaseInfo[] = [
 	{
 		id: "Case-001",
@@ -71,27 +50,32 @@ const mockCases: CaseInfo[] = [
 	},
 ];
 
+type PriorityCounts = {
+	[key in CasePriority]?: number;
+};
+
+// Map priorities to a display color for buttons (Stays here for the top filters)
+const priorityColorMap: Record<CasePriority, string> = {
+	Purple: "purple-text",
+	Red: "red-text",
+	Orange: "orange-text",
+	Yellow: "yellow-text",
+	Green: "green-text",
+};
+
 // --- Case Counting Logic ---
 const priorityCounts: PriorityCounts = mockCases.reduce((acc, c) => {
 	acc[c.priority] = (acc[c.priority] || 0) + 1;
 	return acc;
 }, {} as PriorityCounts);
 
-// --- Material Design Icon Placeholder for WARNING ---
-const MDI_ICON_ALERT = <span className="mdi-icon mdi-alert">warning</span>;
-
-// Define the possible views (make sure this is consistent with Dashboard.tsx)
 export type ActiveView = "Ambulances" | "Cases";
 
-// Define the interface for the props the component expects
 interface PanelProps {
 	activeView: ActiveView;
-	// handleViewChange is a function that takes one argument (a string literal: 'Ambulances' or 'Cases')
-	// and returns nothing (void).
 	handleViewChange: (view: ActiveView) => void;
 }
 
-// --- Component Definition ---
 export default function CasesPanel({
 	activeView,
 	handleViewChange,
@@ -128,55 +112,15 @@ export default function CasesPanel({
 			<div className="active-cases">
 				<h3 className="section-title">Active Cases</h3>
 
-				{/* Case List */}
+				{/* Case List - NOW MUCH CLEANER! */}
 				<div className="case-list">
-					{mockCases.map((c, i) => (
-						<div className="case-card" key={i}>
-							{/* 1. WARNING ICON (Absolute Positioned - Direct child of case-card) */}
-							<div className="warning-icon">
-								<span
-									className={`priority-icon priority-${c.priority.toLowerCase()}`}
-								>
-									{MDI_ICON_ALERT}
-								</span>
-							</div>
-
-							{/* 2. HEADER VISUALS (Title + Bar/Square) */}
-							<div className="case-header-visuals">
-								{/* The Title (e.g., Cardiac Arrest) */}
-								<span className="case-type">{c.type}</span>
-
-								{/* The Purple Bar and Purple Square */}
-								<div className="priority-bars-container">
-									<div
-										className={`priority-bar priority-bar-${c.priority.toLowerCase()}`}
-									/>
-									<div
-										className={`priority-square priority-square-${c.priority.toLowerCase()}`}
-									/>
-								</div>
-							</div>
-
-							{/* 3. CASE DETAILS (Location and Time) */}
-							<div className="case-details-content">
-								{/* Location (Emoji) */}
-								<div className="case-row">
-									<span className="emoji">📍</span>
-									<span>{c.location}</span>
-								</div>
-
-								{/* Reported Time (Emoji) */}
-								<div className="case-row">
-									<span className="emoji">🕒</span>
-									<span>Reported at {c.reportedTime}</span>
-								</div>
-							</div>
-						</div>
+					{mockCases.map((c) => (
+						<CaseCard key={c.id} data={c} />
 					))}
 				</div>
 			</div>
 
-			{/* Bottom Navigation (Inside both CasePanel.tsx and AmbulancePanel.tsx) */}
+			{/* Bottom Navigation */}
 			<div className="bottom-nav">
 				<button
 					className={`nav-item ${
