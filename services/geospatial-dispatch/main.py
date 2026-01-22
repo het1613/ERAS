@@ -9,10 +9,12 @@ import sys
 from datetime import datetime
 from typing import Optional
 
+import numpy as np
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 
 from shared.types import Vehicle, AssignmentSuggestion
+from optimization import run_weighted_dispatch_with_hospitals
 
 # Add parent directory to path to access shared module
 parent_dir = os.path.abspath(os.path.join(os.path.dirname(__file__), '../../'))
@@ -75,6 +77,24 @@ MOCK_VEHICLES = [
     ),
 ]
 
+# Mock hospital data (lat, lng)
+MOCK_HOSPITALS = np.array([
+    [43.5313, -80.3458],  # Hospital 0
+    [43.6537, -80.7036]   # Hospital 1
+])
+
+# Mock incident data
+MOCK_INCIDENTS = [
+    {"id": 0, "lat": 43.2761, "lon": -80.7318, "weight": 8},
+    {"id": 1, "lat": 43.6398, "lon": -80.7308, "weight": 8},
+    {"id": 2, "lat": 43.5205, "lon": -80.6522, "weight": 4},
+    {"id": 3, "lat": 43.5686, "lon": -80.5089, "weight": 8},
+    {"id": 4, "lat": 43.2593, "lon": -80.5692, "weight": 8},
+    {"id": 5, "lat": 43.6865, "lon": -80.6607, "weight": 1},
+    {"id": 6, "lat": 43.6246, "lon": -80.4523, "weight": 4},
+    {"id": 7, "lat": 43.3456, "lon": -80.7593, "weight": 16},
+]
+
 # In-memory storage for vehicle assignments
 vehicle_assignments = {}
 
@@ -95,49 +115,6 @@ def calculate_distance(lat1: float, lon1: float, lat2: float, lon2: float) -> fl
     return math.sqrt((lat2 - lat1) ** 2 + (lon2 - lon1) ** 2) * 111  # Rough km conversion
 
 
-def find_nearest_vehicle(incident_lat: float, incident_lon: float, vehicle_type: Optional[str] = None) -> Optional[Vehicle]:
-    """
-    Find the nearest available vehicle to an incident location.
-    
-    Args:
-        incident_lat: Incident latitude
-        incident_lon: Incident longitude
-        vehicle_type: Optional filter for vehicle type
-        
-    Returns:
-        Nearest available Vehicle or None
-    """
-    available_vehicles = [
-        v for v in MOCK_VEHICLES
-        if v.status == "available" and (vehicle_type is None or v.vehicle_type == vehicle_type)
-    ]
-    
-    if not available_vehicles:
-        return None
-    
-    # Find vehicle with minimum distance
-    nearest = min(
-        available_vehicles,
-        key=lambda v: calculate_distance(incident_lat, incident_lon, v.lat, v.lon)
-    )
-    
-    return nearest
-
-
-def generate_route(vehicle: Vehicle, incident_lat: float, incident_lon: float) -> str:
-    """
-    Generate a route description.
-    
-    Args:
-        vehicle: Vehicle to route from
-        incident_lat, incident_lon: Destination coordinates
-        
-    Returns:
-        Route description
-    """
-    # TODO: Use a routing API (e.g., Google Maps, OSRM).
-    distance = calculate_distance(vehicle.lat, vehicle.lon, incident_lat, incident_lon)
-    return f"Route from ({vehicle.lat:.4f}, {vehicle.lon:.4f}) to incident ({incident_lat:.4f}, {incident_lon:.4f}) (approx {distance:.1f} km)"
 
 
 @app.get("/health")
@@ -187,50 +164,54 @@ async def get_vehicle(vehicle_id: str):
 @app.get("/assignments/{session_id}")
 async def get_assignment(session_id: str, lat: Optional[float] = None, lon: Optional[float] = None):
     """
-    Get or generate vehicle assignment suggestion for a session.
-    
-    Args:
-        session_id: Session identifier
-        lat: Optional incident latitude (for new assignments)
-        lon: Optional incident longitude (for new assignments)
-        
-    Returns:
-        Assignment suggestion
+    Get or generate vehicle assignment suggestion for a session using the optimization model.
     """
     # If assignment already exists, return it
     if session_id in vehicle_assignments:
-        assignment = vehicle_assignments[session_id]
-        return assignment.model_dump()
-    
-    # For MVP: Use default location if not provided (Waterloo, ON)
-    if lat is None:
-        lat = 43.4643
-    if lon is None:
-        lon = -80.5204
-    
-    # Find nearest available vehicle
-    nearest_vehicle = find_nearest_vehicle(lat, lon)
-    
-    if not nearest_vehicle:
+        return vehicle_assignments[session_id].model_dump()
+
+    # Get available vehicles
+    available_vehicles = [v for v in MOCK_VEHICLES if v.status == "available"]
+    if not available_vehicles:
         raise HTTPException(status_code=503, detail="No available vehicles")
+
+    # Run the weighted dispatch optimization
+    dispatch_results = run_weighted_dispatch_with_hospitals(
+        available_vehicles, MOCK_INCIDENTS, MOCK_HOSPITALS, verbose=True
+    )
+
+    # Extract the first assignment from the first round
+    if not dispatch_results["rounds"] or not dispatch_results["rounds"][0]["assignments"]:
+        raise HTTPException(status_code=404, detail="Could not find a suitable assignment.")
+
+    first_assignment = dispatch_results["rounds"][0]["assignments"][0]
     
-    # Generate route
-    route = generate_route(nearest_vehicle, lat, lon)
+    vehicle_id = first_assignment["ambulance_id"]
+    incident_id = first_assignment["incident_id"]
     
-    # Create assignment suggestion
-    assignment = AssignmentSuggestion(
+    vehicle = next((v for v in available_vehicles if v.id == vehicle_id), None)
+    incident = MOCK_INCIDENTS[incident_id]
+
+    # Generate a simple route description for the assignment
+    route_description = (
+        f"Optimized route for {vehicle.id} to incident {incident_id} "
+        f"(lat: {incident['lat']:.4f}, lon: {incident['lon']:.4f}). "
+        f"Total unweighted distance: {first_assignment['unweighted_dist']:.2f} km."
+    )
+
+    # Create and store the assignment suggestion
+    assignment_suggestion = AssignmentSuggestion(
         session_id=session_id,
-        suggested_vehicle_id=nearest_vehicle.id,
-        route=route,
+        suggested_vehicle_id=vehicle_id,
+        route=route_description,
         timestamp=datetime.now()
     )
     
-    # Store assignment
-    vehicle_assignments[session_id] = assignment
+    vehicle_assignments[session_id] = assignment_suggestion
     
-    logger.info(f"Generated assignment suggestion for session {session_id}: {nearest_vehicle.id}")
+    logger.info(f"Generated optimized assignment for session {session_id}: vehicle {vehicle_id}")
     
-    return assignment.model_dump()
+    return assignment_suggestion.model_dump()
 
 
 @app.post("/assignments/{session_id}/accept")
