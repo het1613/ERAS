@@ -33,8 +33,8 @@ The service exposes the following endpoints:
 - `GET /vehicles`: Returns a list of all vehicles. Can be filtered by status (e.g., `?status=available`).
 - `GET /vehicles/{vehicle_id}`: Returns the details of a specific vehicle.
 - `POST /assignments/find-best`: **Finds the globally optimal ambulance for a new incident.** This endpoint adds the new incident to a list of unassigned incidents and runs the optimization model to find the best assignment based on the current state of all vehicles and incidents.
-- `GET /assignments/{session_id}`: Retrieves a previously generated assignment suggestion by its session ID.
-- `POST /assignments/{session_id}/accept`: Marks the vehicle in the suggested assignment as "dispatched", making it unavailable for future assignments.
+- `GET /assignments/{suggestion_id}`: Retrieves a previously generated assignment suggestion by its suggestion ID.
+- `POST /assignments/{suggestion_id}/accept`: Marks the vehicle in the suggested assignment as "dispatched", making it unavailable for future assignments.
 
 **Note**: The service currently operates with mock data for vehicles, incidents, and hospitals, which is defined in `main.py`.
 
@@ -67,10 +67,10 @@ curl -X POST http://localhost:8002/assignments/find-best \
 -d '{"lat": 43.45, "lon": -80.5, "weight": 10}'
 ```
 
-The response will be an `AssignmentSuggestion` with a unique `session_id`:
+The response will be an `AssignmentSuggestion` with a unique `suggestion_id`:
 ```json
 {
-  "session_id": "a-unique-session-id",
+  "suggestion_id": "a-unique-suggestion-id",
   "suggested_vehicle_id": "ambulance-2",
   "route": "Optimized route for ambulance-2 to new incident at (lat: 43.4500, lon: -80.5000). Total unweighted distance: 15.98 km.",
   "timestamp": "2026-01-22T22:20:13.226897"
@@ -80,17 +80,17 @@ If you send another request for a different incident, the service will find the 
 
 ### 2. Accept the Assignment
 
-To accept a suggestion, make a `POST` request using the `session_id` returned in the suggestion. This updates the status of the assigned vehicle to "dispatched".
+To accept a suggestion, make a `POST` request using the `suggestion_id` returned in the suggestion. This updates the status of the assigned vehicle to "dispatched".
 
 ```bash
-curl -X POST http://localhost:8002/assignments/{session_id}/accept
+curl -X POST http://localhost:8002/assignments/{suggestion_id}/accept
 ```
 
 The response will confirm the acceptance:
 ```json
 {
   "status": "accepted",
-  "session_id": "{session_id}",
+  "suggestion_id": "{suggestion_id}",
   "vehicle_id": "ambulance-2"
 }
 ```

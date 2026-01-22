@@ -226,99 +226,59 @@ async def find_best_assignment(incident: Incident):
         f"Total unweighted distance: {assignment_for_new_incident['unweighted_dist']:.2f} km."
     )
     
-    # Generate a unique session ID for this assignment suggestion
-    session_id = str(uuid.uuid4())
+    # Generate a unique suggestion ID for this assignment suggestion
+    suggestion_id = str(uuid.uuid4())
 
     # Create and store the assignment suggestion
     assignment_suggestion = AssignmentSuggestion(
-        session_id=session_id,
+        suggestion_id=suggestion_id,
         suggested_vehicle_id=vehicle_id,
         route=route_description,
         timestamp=datetime.now()
     )
     
-    vehicle_assignments[session_id] = assignment_suggestion
+    vehicle_assignments[suggestion_id] = assignment_suggestion
     
-    logger.info(f"Generated globally-optimized assignment for session {session_id}: vehicle {vehicle_id}")
+    logger.info(f"Generated globally-optimized assignment for suggestion {suggestion_id}: vehicle {vehicle_id}")
     
     return assignment_suggestion.model_dump()
 
 
-@app.get("/assignments/{session_id}")
-async def get_assignment(session_id: str, lat: Optional[float] = None, lon: Optional[float] = None):
+@app.get("/assignments/{suggestion_id}")
+async def get_assignment(suggestion_id: str):
     """
-    Get or generate vehicle assignment suggestion for a session using the optimization model.
+    Retrieve a previously generated assignment suggestion by its suggestion ID.
     """
     # If assignment already exists, return it
-    if session_id in vehicle_assignments:
-        return vehicle_assignments[session_id].model_dump()
-
-    # Get available vehicles
-    available_vehicles = [v for v in MOCK_VEHICLES if v.status == "available"]
-    if not available_vehicles:
-        raise HTTPException(status_code=503, detail="No available vehicles")
-
-    # Run the weighted dispatch optimization
-    dispatch_results = run_weighted_dispatch_with_hospitals(
-        available_vehicles, MOCK_INCIDENTS, MOCK_HOSPITALS, verbose=True
-    )
-
-    # Extract the first assignment from the first round
-    if not dispatch_results["rounds"] or not dispatch_results["rounds"][0]["assignments"]:
-        raise HTTPException(status_code=404, detail="Could not find a suitable assignment.")
-
-    first_assignment = dispatch_results["rounds"][0]["assignments"][0]
+    if suggestion_id in vehicle_assignments:
+        return vehicle_assignments[suggestion_id].model_dump()
     
-    vehicle_id = first_assignment["ambulance_id"]
-    incident_id = first_assignment["incident_id"]
-    
-    vehicle = next((v for v in available_vehicles if v.id == vehicle_id), None)
-    incident = MOCK_INCIDENTS[incident_id]
-
-    # Generate a simple route description for the assignment
-    route_description = (
-        f"Optimized route for {vehicle.id} to incident {incident_id} "
-        f"(lat: {incident['lat']:.4f}, lon: {incident['lon']:.4f}). "
-        f"Total unweighted distance: {first_assignment['unweighted_dist']:.2f} km."
-    )
-
-    # Create and store the assignment suggestion
-    assignment_suggestion = AssignmentSuggestion(
-        session_id=session_id,
-        suggested_vehicle_id=vehicle_id,
-        route=route_description,
-        timestamp=datetime.now()
-    )
-    
-    vehicle_assignments[session_id] = assignment_suggestion
-    
-    logger.info(f"Generated optimized assignment for session {session_id}: vehicle {vehicle_id}")
-    
-    return assignment_suggestion.model_dump()
+    # If the suggestion_id is not found, raise an error
+    raise HTTPException(status_code=404, detail="Assignment not found")
 
 
-@app.post("/assignments/{session_id}/accept")
-async def accept_assignment(session_id: str):
+@app.post("/assignments/{suggestion_id}/accept")
+async def accept_assignment(suggestion_id: str):
     """
     Accept a vehicle assignment (mark vehicle as dispatched).
     
     Args:
-        session_id: Session identifier
+        suggestion_id: Suggestion identifier
         
     Returns:
         Confirmation message
     """
-    if session_id not in vehicle_assignments:
+    if suggestion_id not in vehicle_assignments:
         raise HTTPException(status_code=404, detail="Assignment not found")
     
-    assignment = vehicle_assignments[session_id]
+    assignment = vehicle_assignments[suggestion_id]
     vehicle = next((v for v in MOCK_VEHICLES if v.id == assignment.suggested_vehicle_id), None)
     
     if vehicle:
         vehicle.status = "dispatched"
-        logger.info(f"Accepted assignment for session {session_id}: vehicle {vehicle.id} dispatched")
+        logger.info(f"Accepted assignment for suggestion {suggestion_id}: vehicle {vehicle.id} dispatched")
     
-    return {"status": "accepted", "session_id": session_id, "vehicle_id": assignment.suggested_vehicle_id}
+    return {"status": "accepted", "suggestion_id": suggestion_id, "vehicle_id": assignment.suggested_vehicle_id}
 
 
 if __name__ == "__main__":

@@ -42,7 +42,7 @@ class Vehicle(BaseModel):
 
 class AssignmentSuggestion(BaseModel):
     """Represents a suggested vehicle assignment for an incident."""
-    session_id: str
+    suggestion_id: str
     suggested_vehicle_id: str
     route: str 
     timestamp: datetime
