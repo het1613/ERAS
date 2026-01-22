@@ -28,30 +28,34 @@ The service exposes the following endpoints:
 - `GET /health`: A health check endpoint.
 - `GET /vehicles`: Returns a list of all vehicles. Can be filtered by status (e.g., `?status=available`).
 - `GET /vehicles/{vehicle_id}`: Returns the details of a specific vehicle.
+- `POST /assignments/find-best`: Finds the best ambulance for a single incident provided in the request body.
 - `GET /assignments/{session_id}`: Generates or retrieves an assignment suggestion for a given session ID. This endpoint triggers the optimization model.
 - `POST /assignments/{session_id}/accept`: Marks the vehicle in the suggested assignment as "dispatched".
 
 **Note**: The service currently operates with mock data for vehicles, incidents, and hospitals, which is defined in `main.py`.
 
-## Running the Service
+## Running the Service for Local Testing
 
-1.  Install the dependencies:
+This service is designed to be run as part of the Docker-based environment for the entire ERAS project. To run the service for local testing:
+
+1.  **Build the service's Docker image:**
     ```bash
-    pip install -r requirements.txt
+    docker-compose build geospatial-dispatch
     ```
 
-2.  Run the FastAPI application:
+2.  **Start the service (and its dependencies):**
     ```bash
-    uvicorn main:app --host 0.0.0.0 --port 8002
+    docker-compose up -d geospatial-dispatch
     ```
+The service will be available at `http://localhost:8002`.
 
 ## Testing the API
 
 You can test the assignment endpoints using a tool like `curl`. The `session_id` can be any unique string you choose for the request.
 
-### 1. Get an Assignment Suggestion
+### 1. Get an Assignment Suggestion (Global Optimization)
 
-This will trigger the optimization model and return a suggested vehicle assignment.
+This will trigger the optimization model and return a suggested vehicle assignment for the highest-priority incident in the mock data.
 
 ```bash
 curl -X GET http://localhost:8002/assignments/session-123
@@ -67,19 +71,39 @@ The response will look something like this:
 }
 ```
 
-### 2. Accept the Assignment
+### 2. Find Best Ambulance for a Single Incident
 
-To accept the suggestion, make a `POST` request using the same `session_id`. This will update the status of the assigned vehicle to "dispatched".
+You can get an assignment for a specific incident by sending a `POST` request with the incident's location and weight.
 
 ```bash
-curl -X POST http://localhost:8002/assignments/session-123/accept
+curl -X POST http://localhost:8002/assignments/find-best \
+-H "Content-Type: application/json" \
+-d '{"lat": 43.45, "lon": -80.5, "weight": 10}'
+```
+
+The response will be an `AssignmentSuggestion` with a unique `session_id`:
+```json
+{
+  "session_id": "a-unique-session-id",
+  "suggested_vehicle_id": "ambulance-2",
+  "route": "Optimized route for ambulance-2 to incident at (lat: 43.4500, lon: -80.5000). Total unweighted distance: 15.98 km.",
+  "timestamp": "2026-01-22T22:11:04.515048"
+}
+```
+
+### 3. Accept the Assignment
+
+To accept the suggestion from either of the above methods, make a `POST` request using the same `session_id` returned in the suggestion. This will update the status of the assigned vehicle to "dispatched".
+
+```bash
+curl -X POST http://localhost:8002/assignments/{session_id}/accept
 ```
 
 The response will confirm the acceptance:
 ```json
 {
   "status": "accepted",
-  "session_id": "session-123",
+  "session_id": "{session_id}",
   "vehicle_id": "ambulance-1"
 }
 ```

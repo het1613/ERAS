@@ -4,6 +4,53 @@ import numpy as np
 import pandas as pd
 import pulp as pl
 from collections import defaultdict
+from shared.types import Vehicle, Incident
+
+def find_best_ambulance_for_incident(incident: Incident, ambulances: list[Vehicle], hospitals: np.ndarray):
+    """
+    Find the best ambulance for a single incident based on weighted cost.
+
+    Args:
+        incident: The incident to be dispatched.
+        ambulances: A list of available ambulances.
+        hospitals: A numpy array of hospital locations.
+
+    Returns:
+        A dictionary containing the best assignment details, or None if no ambulance is available.
+    """
+    if not ambulances:
+        return None
+
+    min_weighted_cost = float('inf')
+    best_assignment_details = {}
+
+    incident_coords = (incident.lat, incident.lon)
+
+    # Find the nearest hospital to the incident
+    h_idx, inc_to_h_dist = nearest_hospital(incident_coords, hospitals)
+
+    for ambulance in ambulances:
+        ambulance_coords = (ambulance.lat, ambulance.lon)
+
+        # Calculate distance from ambulance to incident
+        result = coord_distance([ambulance_coords], [incident_coords])
+        amb_to_inc_dist = result['rows'][0]['elements'][0]['distance']['value'] / 1000.0
+
+        # Calculate unweighted and weighted costs
+        unweighted_dist = amb_to_inc_dist + inc_to_h_dist
+        weighted_cost = unweighted_dist / incident.weight if incident.weight > 0 else float('inf')
+
+        if weighted_cost < min_weighted_cost:
+            min_weighted_cost = weighted_cost
+            best_assignment_details = {
+                "ambulance_id": ambulance.id,
+                "hospital_id": h_idx,
+                "weighted_cost": weighted_cost,
+                "unweighted_dist": unweighted_dist,
+                "weight": incident.weight,
+            }
+
+    return best_assignment_details
 
 def coord_distance(origins: list[tuple[float, float]], 
                          destinations: list[tuple[float, float]],

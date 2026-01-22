@@ -47,3 +47,10 @@ class AssignmentSuggestion(BaseModel):
     route: str 
     timestamp: datetime
 
+
+class Incident(BaseModel):
+    """Represents a single incident, used as input for targeted dispatch."""
+    lat: float
+    lon: float
+    weight: int
+

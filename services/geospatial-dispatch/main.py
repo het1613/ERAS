@@ -6,6 +6,7 @@ import os
 import math
 import logging
 import sys
+import uuid
 from datetime import datetime
 from typing import Optional
 
@@ -13,8 +14,8 @@ import numpy as np
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 
-from shared.types import Vehicle, AssignmentSuggestion
-from optimization import run_weighted_dispatch_with_hospitals
+from shared.types import Vehicle, AssignmentSuggestion, Incident
+from optimization import run_weighted_dispatch_with_hospitals, find_best_ambulance_for_incident
 
 # Add parent directory to path to access shared module
 parent_dir = os.path.abspath(os.path.join(os.path.dirname(__file__), '../../'))
@@ -159,6 +160,52 @@ async def get_vehicle(vehicle_id: str):
         raise HTTPException(status_code=404, detail="Vehicle not found")
     
     return vehicle.model_dump()
+
+
+@app.post("/assignments/find-best")
+async def find_best_assignment(incident: Incident):
+    """
+    Find the best vehicle for a single incident.
+    """
+    # Get available vehicles
+    available_vehicles = [v for v in MOCK_VEHICLES if v.status == "available"]
+    if not available_vehicles:
+        raise HTTPException(status_code=503, detail="No available vehicles")
+
+    # Find the best ambulance for the given incident
+    best_assignment = find_best_ambulance_for_incident(
+        incident, available_vehicles, MOCK_HOSPITALS
+    )
+
+    if not best_assignment:
+        raise HTTPException(status_code=404, detail="Could not find a suitable assignment.")
+
+    vehicle_id = best_assignment["ambulance_id"]
+    vehicle = next((v for v in available_vehicles if v.id == vehicle_id), None)
+
+    # Generate a simple route description for the assignment
+    route_description = (
+        f"Optimized route for {vehicle.id} to incident at "
+        f"(lat: {incident.lat:.4f}, lon: {incident.lon:.4f}). "
+        f"Total unweighted distance: {best_assignment['unweighted_dist']:.2f} km."
+    )
+    
+    # Generate a unique session ID for this assignment
+    session_id = str(uuid.uuid4())
+
+    # Create and store the assignment suggestion
+    assignment_suggestion = AssignmentSuggestion(
+        session_id=session_id,
+        suggested_vehicle_id=vehicle_id,
+        route=route_description,
+        timestamp=datetime.now()
+    )
+    
+    vehicle_assignments[session_id] = assignment_suggestion
+    
+    logger.info(f"Generated single assignment for session {session_id}: vehicle {vehicle_id}")
+    
+    return assignment_suggestion.model_dump()
 
 
 @app.get("/assignments/{session_id}")
