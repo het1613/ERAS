@@ -216,3 +216,62 @@
   font-size: 0.875rem;
 }
 
+/* MapPanel.css */
+
+/* 1. The Container - Places the icon on the map */
+.map-marker-container {
+    position: absolute;
+    transform: translate(-50%, -50%); /* Centers icon on the coords */
+    cursor: pointer;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    z-index: 10;
+}
+
+/* 2. The SVG Icon Size */
+.ambulance-svg {
+    width: 50px;
+    height: 50px;
+    /* Adds a shadow so you can see it even if colors fail */
+    filter: drop-shadow(0 2px 4px rgba(0,0,0,0.4)); 
+}
+
+/* 3. Status Colors - THIS IS KEY */
+/* These set the text 'color', which the SVG uses for its 'fill' */
+/* Available - Green */
+.map-status-available { 
+    color: #2e994e; 
+}
+
+/* On-Scene - Red */
+.map-status-onscene { 
+    color: #d6455d; 
+}
+
+/* Returning - Purple */
+.map-status-returning { 
+    color: #3d69ff; 
+}
+
+/* Dispatched - Orange */
+.map-status-dispatched { 
+    color: #c87a1e; 
+}
+
+
+/* 4. Hover Effects */
+.map-marker-container:hover {
+    z-index: 100;
+    transform: translate(-50%, -60%) scale(1.15);
+}
+
+.marker-label {
+    background: rgba(0, 0, 0, 0.8);
+    color: white;
+    padding: 2px 6px;
+    border-radius: 4px;
+    font-size: 10px;
+    font-weight: bold;
+    margin-top: -5px;
+}
