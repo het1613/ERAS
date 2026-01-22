@@ -4,22 +4,26 @@ The Geospatial Dispatch Service is a FastAPI application responsible for trackin
 
 ## How it Works
 
-The core of this service is an optimization model that assigns available ambulances to active incidents. The model operates in rounds, making a batch of assignments in each round until all incidents are served.
+The core of this service is an optimization model that assigns available ambulances to active incidents. The model can be used for both batch processing a list of existing incidents and for finding an optimal assignment for a new, single incident in the context of the current system state.
+
+### Stateful Optimization
+
+The service is **stateful**. It maintains an in-memory list of all incidents that have been reported but not yet assigned to a vehicle. When a new incident comes in via the `/assignments/find-best` endpoint, the service runs its optimization model against all available ambulances and all currently unassigned incidents. This ensures that the assignment for the new incident is globally optimal, not just the best choice in a vacuum.
 
 ### Cost Function
 
-The assignment process is formulated as a k-assignment problem, which is a type of Integer Linear Program (ILP). The objective is to minimize a "weighted cost" for each assignment. The cost for assigning a specific ambulance to a specific incident is calculated as:
+The assignment process is formulated as a k-assignment problem, a type of Integer Linear Program (ILP). The objective is to minimize a "weighted cost" for each assignment. The cost for assigning a specific ambulance to a specific incident is:
 
 ```
 cost = (distance_from_ambulance_to_incident + distance_from_incident_to_hospital) / incident_weight
 ```
 
-- **Distances**: The model calculates the distance from an available ambulance to the incident location, and from the incident location to the nearest hospital. Currently, this is a simplified Euclidean distance, but it is designed to be replaceable with a real routing service.
-- **Incident Weight**: Each incident has a `weight` that represents its urgency or severity. A higher weight results in a lower overall cost, making the incident a higher priority for assignment.
+- **Distances**: The model calculates the distance from an available ambulance to the incident and from the incident to the nearest hospital. This is currently a simplified Euclidean distance, designed to be replaceable with a real routing service.
+- **Incident Weight**: Each incident has a `weight` representing its urgency. A higher weight results in a lower cost, making it a higher priority.
 
 ### Optimization
 
-The service uses the `pulp` library to solve the ILP. In each round, it determines the optimal set of assignments (up to the number of available ambulances) that minimizes the total weighted cost for that round. After an ambulance is assigned, its position is updated to the location of the hospital it was sent to for the next round of assignments.
+The service uses the `pulp` library to solve the ILP. It determines the optimal set of assignments that minimizes the total weighted cost for all available ambulances and unassigned incidents.
 
 ## API Endpoints
 
@@ -28,15 +32,15 @@ The service exposes the following endpoints:
 - `GET /health`: A health check endpoint.
 - `GET /vehicles`: Returns a list of all vehicles. Can be filtered by status (e.g., `?status=available`).
 - `GET /vehicles/{vehicle_id}`: Returns the details of a specific vehicle.
-- `POST /assignments/find-best`: Finds the best ambulance for a single incident provided in the request body.
-- `GET /assignments/{session_id}`: Generates or retrieves an assignment suggestion for a given session ID. This endpoint triggers the optimization model.
-- `POST /assignments/{session_id}/accept`: Marks the vehicle in the suggested assignment as "dispatched".
+- `POST /assignments/find-best`: **Finds the globally optimal ambulance for a new incident.** This endpoint adds the new incident to a list of unassigned incidents and runs the optimization model to find the best assignment based on the current state of all vehicles and incidents.
+- `GET /assignments/{session_id}`: Retrieves a previously generated assignment suggestion by its session ID.
+- `POST /assignments/{session_id}/accept`: Marks the vehicle in the suggested assignment as "dispatched", making it unavailable for future assignments.
 
 **Note**: The service currently operates with mock data for vehicles, incidents, and hospitals, which is defined in `main.py`.
 
 ## Running the Service for Local Testing
 
-This service is designed to be run as part of the Docker-based environment for the entire ERAS project. To run the service for local testing:
+This service is designed to be run as part of the Docker-based environment for the entire ERAS project.
 
 1.  **Build the service's Docker image:**
     ```bash
@@ -51,29 +55,11 @@ The service will be available at `http://localhost:8002`.
 
 ## Testing the API
 
-You can test the assignment endpoints using a tool like `curl`. The `session_id` can be any unique string you choose for the request.
+You can test the assignment endpoints using `curl`.
 
-### 1. Get an Assignment Suggestion (Global Optimization)
+### 1. Get a Globally Optimized Assignment for a New Incident
 
-This will trigger the optimization model and return a suggested vehicle assignment for the highest-priority incident in the mock data.
-
-```bash
-curl -X GET http://localhost:8002/assignments/session-123
-```
-
-The response will look something like this:
-```json
-{
-  "session_id": "session-123",
-  "suggested_vehicle_id": "ambulance-1",
-  "route": "Optimized route for ambulance-1 to incident 7 (lat: 43.3456, lon: -80.7593). Total unweighted distance: 54.32 km.",
-  "timestamp": "2023-11-21T12:34:56.789Z"
-}
-```
-
-### 2. Find Best Ambulance for a Single Incident
-
-You can get an assignment for a specific incident by sending a `POST` request with the incident's location and weight.
+Send a `POST` request with the incident's location and weight. The service will return the best assignment, considering all other unassigned incidents and available ambulances.
 
 ```bash
 curl -X POST http://localhost:8002/assignments/find-best \
@@ -86,14 +72,15 @@ The response will be an `AssignmentSuggestion` with a unique `session_id`:
 {
   "session_id": "a-unique-session-id",
   "suggested_vehicle_id": "ambulance-2",
-  "route": "Optimized route for ambulance-2 to incident at (lat: 43.4500, lon: -80.5000). Total unweighted distance: 15.98 km.",
-  "timestamp": "2026-01-22T22:11:04.515048"
+  "route": "Optimized route for ambulance-2 to new incident at (lat: 43.4500, lon: -80.5000). Total unweighted distance: 15.98 km.",
+  "timestamp": "2026-01-22T22:20:13.226897"
 }
 ```
+If you send another request for a different incident, the service will find the best assignment from the *remaining* available ambulances.
 
-### 3. Accept the Assignment
+### 2. Accept the Assignment
 
-To accept the suggestion from either of the above methods, make a `POST` request using the same `session_id` returned in the suggestion. This will update the status of the assigned vehicle to "dispatched".
+To accept a suggestion, make a `POST` request using the `session_id` returned in the suggestion. This updates the status of the assigned vehicle to "dispatched".
 
 ```bash
 curl -X POST http://localhost:8002/assignments/{session_id}/accept
@@ -104,7 +91,7 @@ The response will confirm the acceptance:
 {
   "status": "accepted",
   "session_id": "{session_id}",
-  "vehicle_id": "ambulance-1"
+  "vehicle_id": "ambulance-2"
 }
 ```
 

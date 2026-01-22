@@ -96,6 +96,9 @@ MOCK_INCIDENTS = [
     {"id": 7, "lat": 43.3456, "lon": -80.7593, "weight": 16},
 ]
 
+# In-memory storage for all incoming incidents
+TRACKED_INCIDENTS = []
+
 # In-memory storage for vehicle assignments
 vehicle_assignments = {}
 
@@ -165,32 +168,65 @@ async def get_vehicle(vehicle_id: str):
 @app.post("/assignments/find-best")
 async def find_best_assignment(incident: Incident):
     """
-    Find the best vehicle for a single incident.
+    Find the best vehicle for a single incident, considering the current global state.
     """
-    # Get available vehicles
+    # Assign a unique ID to the new incident for tracking
+    new_incident_id = str(uuid.uuid4())
+    
+    # Create a dictionary for the new incident to store it
+    new_incident_dict = {
+        "id": new_incident_id,
+        "lat": incident.lat,
+        "lon": incident.lon,
+        "weight": incident.weight,
+        "status": "unassigned"  # Track assignment status
+    }
+    
+    # Add the new incident to our persistent list
+    TRACKED_INCIDENTS.append(new_incident_dict)
+
+    # Get all currently available vehicles
     available_vehicles = [v for v in MOCK_VEHICLES if v.status == "available"]
     if not available_vehicles:
-        raise HTTPException(status_code=503, detail="No available vehicles")
+        raise HTTPException(status_code=503, detail="No available vehicles to assign")
 
-    # Find the best ambulance for the given incident
-    best_assignment = find_best_ambulance_for_incident(
-        incident, available_vehicles, MOCK_HOSPITALS
+    # Get all incidents that are not yet assigned
+    unassigned_incidents = [i for i in TRACKED_INCIDENTS if i.get("status") == "unassigned"]
+    
+    # Run the full optimization model on the current state
+    dispatch_results = run_weighted_dispatch_with_hospitals(
+        available_vehicles, unassigned_incidents, MOCK_HOSPITALS, verbose=True
     )
 
-    if not best_assignment:
-        raise HTTPException(status_code=404, detail="Could not find a suitable assignment.")
+    # Find the assignment for our specific new incident
+    assignment_for_new_incident = None
+    for round_summary in dispatch_results.get("rounds", []):
+        for assignment in round_summary.get("assignments", []):
+            # The 'incident_id' from the optimizer corresponds to the index in the list
+            # of unassigned_incidents that was passed to it.
+            assigned_incident_index = assignment["incident_id"]
+            if unassigned_incidents[assigned_incident_index]["id"] == new_incident_id:
+                assignment_for_new_incident = assignment
+                break
+        if assignment_for_new_incident:
+            break
 
-    vehicle_id = best_assignment["ambulance_id"]
-    vehicle = next((v for v in available_vehicles if v.id == vehicle_id), None)
+    if not assignment_for_new_incident:
+        raise HTTPException(status_code=404, detail="Could not find a suitable assignment for the new incident.")
+
+    # Mark the incident as "assigned" in our tracked list
+    new_incident_dict["status"] = "assigned"
+
+    vehicle_id = assignment_for_new_incident["ambulance_id"]
 
     # Generate a simple route description for the assignment
     route_description = (
-        f"Optimized route for {vehicle.id} to incident at "
+        f"Optimized route for {vehicle_id} to new incident at "
         f"(lat: {incident.lat:.4f}, lon: {incident.lon:.4f}). "
-        f"Total unweighted distance: {best_assignment['unweighted_dist']:.2f} km."
+        f"Total unweighted distance: {assignment_for_new_incident['unweighted_dist']:.2f} km."
     )
     
-    # Generate a unique session ID for this assignment
+    # Generate a unique session ID for this assignment suggestion
     session_id = str(uuid.uuid4())
 
     # Create and store the assignment suggestion
@@ -203,7 +239,7 @@ async def find_best_assignment(incident: Incident):
     
     vehicle_assignments[session_id] = assignment_suggestion
     
-    logger.info(f"Generated single assignment for session {session_id}: vehicle {vehicle_id}")
+    logger.info(f"Generated globally-optimized assignment for session {session_id}: vehicle {vehicle_id}")
     
     return assignment_suggestion.model_dump()
 
