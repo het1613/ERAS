@@ -61,6 +61,7 @@
 }
 
 .unit-card {
+	position: relative;
 	background: white;
 	border-radius: 18px;
 	padding: 20px;
@@ -74,7 +75,7 @@
 	align-items: center;
 	gap: 10px;
 	font-weight: 700;
-	font-size: 18px;
+	font-size: 20px;
 	margin-bottom: 8px;
 }
 
@@ -159,3 +160,38 @@
 	font-weight: 700;
 	color: #007aff;
 }
+
+.warning-icon {
+    position: absolute;
+    top: 20px; 
+    right: 20px;
+    z-index: 3; /* Ensure icon is on top */
+}
+
+.icon_css {
+    width: 35px;
+	height: 35px;
+    display: inline-block;
+    line-height: 1;
+    text-transform: none;
+    letter-spacing: normal;
+    word-wrap: normal;
+    white-space: nowrap;
+    direction: ltr;
+
+    -webkit-font-smoothing: antialiased;
+    text-rendering: optimizeLegibility;
+    -moz-osx-font-smoothing: grayscale;
+    -webkit-font-feature-settings: 'liga';
+            font-feature-settings: 'liga';
+
+	position: absolute;
+    top: 20px; 
+    right: 10px;
+    z-index: 3;
+}
+
+.icon_css-available { color: #2e994e; }
+.icon_css-onscene { color: #d6455d; }
+.icon_css-returning { color: #3d69ff; }
+.icon_css-dispatched { color: #c87a1e; }

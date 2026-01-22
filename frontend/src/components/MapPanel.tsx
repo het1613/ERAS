@@ -1,152 +1,70 @@
-import { useEffect, useState } from 'react'
-import './MapPanel.css'
-
-interface Vehicle {
-  id: string
-  lat: number
-  lon: number
-  status: string
-  vehicle_type: string
-}
-
-interface AssignmentSuggestion {
-  session_id: string
-  suggested_vehicle_id: string
-  route: string
-  timestamp: string
-}
+import React, { useMemo, useRef, useEffect } from "react";
+import { GoogleMap, useLoadScript, OverlayView } from "@react-google-maps/api";
+import "./MapPanel.css";
+// IMPORT YOUR NEW COMPONENT
+import { AmbulanceMapIcon } from "./AmbulanceMapIcon"; // Adjust path if needed
+import { UnitInfo } from "./AmbulancePanel";
 
 interface MapPanelProps {
-  sessionId: string | null
+	units: UnitInfo[];
+	focusedUnit: UnitInfo | null;
 }
 
-const MapPanel = ({ sessionId }: MapPanelProps) => {
-  const [vehicles, setVehicles] = useState<Vehicle[]>([])
-  const [assignment, setAssignment] = useState<AssignmentSuggestion | null>(null)
+const parseCoords = (coordString: string) => {
+	const [lat, lng] = coordString.split(",").map((s) => parseFloat(s.trim()));
+	return { lat, lng };
+};
 
-  useEffect(() => {
-    // Fetch vehicles
-    const apiUrl = import.meta.env.VITE_API_URL || 'http://localhost:8000'
-    fetch(`${apiUrl}/vehicles`)
-      .then(res => res.json())
-      .then(data => {
-        setVehicles(data.vehicles || [])
-      })
-      .catch(err => console.error('Error fetching vehicles:', err))
-  }, [])
+export default function MapPanel({ units, focusedUnit }: MapPanelProps) {
+	const apiKey = import.meta.env.VITE_GOOGLE_MAPS_API_KEY;
+	const { isLoaded } = useLoadScript({ googleMapsApiKey: apiKey! });
+	const mapRef = useRef<google.maps.Map | null>(null);
+	const defaultCenter = useMemo(() => ({ lat: 43.4643, lng: -80.5205 }), []);
 
-  useEffect(() => {
-    if (sessionId) {
-      // Fetch assignment for selected session
-      const apiUrl = import.meta.env.VITE_API_URL || 'http://localhost:8000'
-      fetch(`${apiUrl}/sessions/${sessionId}/assignment`)
-        .then(res => {
-          if (res.ok) {
-            return res.json()
-          }
-          return null
-        })
-        .then(data => {
-          setAssignment(data)
-        })
-        .catch(err => {
-          console.error('Error fetching assignment:', err)
-          setAssignment(null)
-        })
-    } else {
-      setAssignment(null)
-    }
-  }, [sessionId])
+	useEffect(() => {
+		if (focusedUnit && mapRef.current) {
+			const position = parseCoords(focusedUnit.coords);
+			mapRef.current.panTo(position);
+			mapRef.current.setZoom(15);
+		}
+	}, [focusedUnit]);
 
-  return (
-    <div className="map-panel">
-      <div className="map-panel-header">
-        <h2>Map View</h2>
-        {sessionId && (
-          <span className="session-badge">Session: {sessionId.substring(0, 8)}...</span>
-        )}
-      </div>
+	if (!isLoaded) return <div>Loading Map...</div>;
 
-      <div className="map-container">
-        {/* Mocked map - placeholder */}
-        <div className="map-placeholder">
-          <div className="map-placeholder-content">
-            <div className="map-icon">🗺️</div>
-            <p>Map Visualization</p>
-            <p className="map-subtitle">(Mocked for MVP)</p>
-          </div>
+	return (
+		<div style={{ height: "100vh", width: "100vw" }}>
+			<GoogleMap
+				zoom={12}
+				center={defaultCenter}
+				onLoad={(map) => {
+					mapRef.current = map;
+				}}
+				mapContainerStyle={{ width: "100%", height: "100%" }}
+			>
+				{units.map((unit) => {
+					const position = parseCoords(unit.coords);
+					const statusClass = unit.status
+						.toLowerCase()
+						.replace("on-scene", "onscene");
 
-          {/* Vehicle markers overlay */}
-          <div className="vehicle-markers">
-            {vehicles.map(vehicle => {
-              // Mock positioning (in real implementation, would use actual lat/lon)
-              const x = 50 + (vehicle.lat - 43.45) * 1000
-              const y = 50 + (vehicle.lon + 80.52) * 1000
-              
-              return (
-                <div
-                  key={vehicle.id}
-                  className={`vehicle-marker vehicle-${vehicle.status}`}
-                  style={{
-                    left: `${Math.max(10, Math.min(90, x))}%`,
-                    top: `${Math.max(10, Math.min(90, y))}%`
-                  }}
-                  title={`${vehicle.id} (${vehicle.vehicle_type}) - ${vehicle.status}`}
-                >
-                  <div className="marker-dot"></div>
-                </div>
-              )
-            })}
-          </div>
-        </div>
-      </div>
-
-      <div className="map-panel-sidebar">
-        <div className="vehicles-section">
-          <h3>Vehicles ({vehicles.length})</h3>
-          <div className="vehicles-list">
-            {vehicles.length === 0 ? (
-              <div className="empty-state">No vehicles available</div>
-            ) : (
-              vehicles.map(vehicle => (
-                <div key={vehicle.id} className={`vehicle-item vehicle-${vehicle.status}`}>
-                  <div className="vehicle-header">
-                    <span className="vehicle-id">{vehicle.id}</span>
-                    <span className={`vehicle-status status-${vehicle.status}`}>
-                      {vehicle.status}
-                    </span>
-                  </div>
-                  <div className="vehicle-info">
-                    <span className="vehicle-type">{vehicle.vehicle_type}</span>
-                    <span className="vehicle-location">
-                      {vehicle.lat.toFixed(4)}, {vehicle.lon.toFixed(4)}
-                    </span>
-                  </div>
-                </div>
-              ))
-            )}
-          </div>
-        </div>
-
-        {assignment && (
-          <div className="assignment-section">
-            <h3>Assignment</h3>
-            <div className="assignment-details">
-              <div className="assignment-item">
-                <span className="assignment-label">Vehicle:</span>
-                <span className="assignment-value">{assignment.suggested_vehicle_id}</span>
-              </div>
-              <div className="assignment-item">
-                <span className="assignment-label">Route:</span>
-                <span className="assignment-value">{assignment.route}</span>
-              </div>
-            </div>
-          </div>
-        )}
-      </div>
-    </div>
-  )
+					return (
+						<OverlayView
+							key={unit.id}
+							position={position}
+							mapPaneName={OverlayView.OVERLAY_MOUSE_TARGET}
+						>
+							{/* We apply the status class to this wrapper */}
+							<div
+								className={`map-marker-container map-status-${statusClass}`}
+							>
+								{/* Use the SVG component directly */}
+								<AmbulanceMapIcon className="ambulance-svg" />
+								<div className="marker-label">{unit.id}</div>
+							</div>
+						</OverlayView>
+					);
+				})}
+			</GoogleMap>
+		</div>
+	);
 }
-
-export default MapPanel
-

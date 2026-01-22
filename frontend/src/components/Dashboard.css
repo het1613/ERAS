@@ -2,20 +2,19 @@
   display: flex;
   height: 100%;
   width: 100%;
+  flex-direction: row;
+  overflow: hidden;
 }
 
 .dashboard-left {
-  flex: 0 0 60%;
   border-right: 1px solid #e0e0e0;
-  overflow: hidden;
+  overflow: auto;
   display: flex;
-  flex-direction: column;
 }
 
 .dashboard-right {
   flex: 1;
   overflow: hidden;
   display: flex;
-  flex-direction: column;
 }
 

@@ -1,41 +1,15 @@
 import React from "react";
 import "./AmbulancePanel.css";
+import AmbulanceCard from "./AmbulanceCard";
 
 export type UnitStatus = "Available" | "On-scene" | "Returning" | "Dispatched";
 
-interface UnitInfo {
+export interface UnitInfo {
 	id: string;
 	status: UnitStatus;
 	crew: string;
 	coords: string;
 }
-
-const mockUnits: UnitInfo[] = [
-	{
-		id: "Ambulance 2001",
-		status: "Available",
-		crew: "J. Smith, S. Williams",
-		coords: "43.4643, -80.4895",
-	},
-	{
-		id: "Ambulance 2002",
-		status: "Available",
-		crew: "J. Smith, S. Williams",
-		coords: "43.4643, -80.4895",
-	},
-	{
-		id: "Ambulance 2003",
-		status: "Returning",
-		crew: "J. Smith, S. Williams",
-		coords: "43.4643, -80.4895",
-	},
-	{
-		id: "Ambulance 2004",
-		status: "Dispatched",
-		crew: "J. Smith, S. Williams",
-		coords: "43.4643, -80.4895",
-	},
-];
 
 // Define the possible views (make sure this is consistent with Dashboard.tsx)
 export type ActiveView = "Ambulances" | "Cases";
@@ -43,15 +17,18 @@ export type ActiveView = "Ambulances" | "Cases";
 // Define the interface for the props the component expects
 interface PanelProps {
 	activeView: ActiveView;
-	// handleViewChange is a function that takes one argument (a string literal: 'Ambulances' or 'Cases')
-	// and returns nothing (void).
 	handleViewChange: (view: ActiveView) => void;
+	// NEW PROPS
+	units: UnitInfo[];
+	onUnitClick: (unit: UnitInfo) => void;
 }
 
 export default function AmbulancePanel({
 	activeView,
 	handleViewChange,
-}: PanelProps): JSX.Element {
+	units, // Receive units
+	onUnitClick, // Receive click handler
+}: PanelProps) {
 	return (
 		<div className="dispatch-panel">
 			{/* Top Bar*/}
@@ -73,34 +50,14 @@ export default function AmbulancePanel({
 
 				{/* Unit List */}
 				<div className="unit-list">
-					{mockUnits.map((u, i) => (
-						<div className="unit-card" key={i}>
-							<div className="unit-header">
-								<span
-									className={`status-dot ${u.status
-										.toLowerCase()
-										.replace("on-scene", "onscene")}`}
-								/>
-								<span className="unit-id">{u.id}</span>
-							</div>
-
-							<div
-								className={`unit-status status-${u.status
-									.toLowerCase()
-									.replace("on-scene", "onscene")}`}
-							>
-								{u.status}
-							</div>
-
-							<div className="unit-row">
-								<span className="emoji">👥</span>
-								<span>{u.crew}</span>
-							</div>
-
-							<div className="unit-row">
-								<span className="emoji">📍</span>
-								<span>{u.coords}</span>
-							</div>
+					{units.map((u) => (
+						// Wrap the card in a div to handle the click
+						<div
+							key={u.id}
+							onClick={() => onUnitClick(u)}
+							style={{ cursor: "pointer" }}
+						>
+							<AmbulanceCard unitData={u} />
 						</div>
 					))}
 				</div>
