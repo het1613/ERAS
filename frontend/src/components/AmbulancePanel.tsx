@@ -1,4 +1,3 @@
-import React from "react";
 import "./AmbulancePanel.css";
 import AmbulanceCard from "./AmbulanceCard";
 
@@ -12,7 +11,7 @@ export interface UnitInfo {
 }
 
 // Define the possible views (make sure this is consistent with Dashboard.tsx)
-export type ActiveView = "Ambulances" | "Cases";
+export type ActiveView = "Ambulances" | "Cases" | "Transcripts";
 
 // Define the interface for the props the component expects
 interface PanelProps {
@@ -66,20 +65,25 @@ export default function AmbulancePanel({
 			{/* Bottom Navigation (Inside both CasePanel.tsx and AmbulancePanel.tsx) */}
 			<div className="bottom-nav">
 				<button
-					className={`nav-item ${
-						activeView === "Ambulances" ? "active" : ""
-					}`}
+					className={`nav-item ${activeView === "Ambulances" ? "active" : ""
+						}`}
 					onClick={() => handleViewChange("Ambulances")}
 				>
 					<span className="emoji">🚑</span> Ambulances
 				</button>
 				<button
-					className={`nav-item ${
-						activeView === "Cases" ? "active" : ""
-					}`}
+					className={`nav-item ${activeView === "Cases" ? "active" : ""
+						}`}
 					onClick={() => handleViewChange("Cases")}
 				>
 					<span className="emoji">⚠️</span> Cases
+				</button>
+				<button
+					className={`nav-item ${activeView === "Transcripts" ? "active" : ""
+						}`}
+					onClick={() => handleViewChange("Transcripts")}
+				>
+					<span className="emoji">📝</span> Transcripts
 				</button>
 			</div>
 		</div>

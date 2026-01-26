@@ -1,5 +1,4 @@
 // CaseCard.tsx
-import React from "react";
 import "./CasePanel.css"; // Keep the CSS import so styles work
 import { CaseInfo } from "./types"; // Import the shared type
 

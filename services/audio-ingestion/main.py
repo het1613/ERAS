@@ -6,9 +6,13 @@ import os
 import uuid
 import logging
 import sys
+import asyncio
+import base64
+import json
 from datetime import datetime
+from typing import List
 
-from fastapi import FastAPI, UploadFile, File, HTTPException
+from fastapi import FastAPI, UploadFile, File, HTTPException, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
 
 from shared.kafka_client import create_producer
@@ -84,23 +88,23 @@ async def ingest_audio(file: UploadFile = File(...)):
         # Read file content
         file_content = await file.read()
         
-        # For MVP: Create a single chunk with mock data
-        # In production, this would process and chunk the audio appropriately
-        chunk_data = file_content.decode('utf-8', errors='ignore') if isinstance(file_content, bytes) else str(file_content)
+        # Base64 encode the file content
+        # In a real scenario, we might want to chunk this if the file is large
+        chunk_data = base64.b64encode(file_content).decode('utf-8')
         
         chunk = AudioChunk(
             session_id=session_id,
-            chunk_data=chunk_data or "mock_audio_data",
+            chunk_data=chunk_data,
             timestamp=datetime.now(),
             sequence_number=0
         )
         
         # Serialize and publish to Kafka
         chunk_dict = chunk.model_dump()
-        chunk_dict['timestamp'] = chunk_dict['timestamp'].isoformat() # Convert datetime to ISO format string for JSON serialization
+        chunk_dict['timestamp'] = chunk_dict['timestamp'].isoformat()
         
         producer.send("audio-chunks", chunk_dict)
-        producer.flush()  # Ensure message is sent
+        producer.flush()
         
         logger.info(f"Published audio chunk to Kafka for session: {session_id}")
         
@@ -114,6 +118,96 @@ async def ingest_audio(file: UploadFile = File(...)):
     except Exception as e:
         logger.error(f"Error ingesting audio: {e}", exc_info=True)
         raise HTTPException(status_code=500, detail=f"Error ingesting audio: {str(e)}")
+
+
+@app.websocket("/ws/stream")
+async def websocket_endpoint(websocket: WebSocket):
+    """
+    WebSocket endpoint for real-time audio streaming.
+    Receives audio blobs, buffers them, and publishes chunks to Kafka.
+    """
+    if producer is None:
+        await websocket.close(code=1011, reason="Kafka producer not initialized")
+        return
+
+    await websocket.accept()
+    
+    session_id = str(uuid.uuid4())
+    logger.info(f"WebSocket audio stream connected. Session ID: {session_id}")
+    
+    # Send session ID to client
+    await websocket.send_json({"session_id": session_id, "status": "connected"})
+    
+    sequence_number = 0
+    buffer = bytearray()
+    # ~5 seconds of audio at 16kHz, 16-bit mono (16000 samples/sec * 2 bytes * 5 sec)
+    # Whisper models need at least 3-5 seconds of audio for reliable transcription
+    CHUNK_SIZE = 16000 * 2 * 5
+    
+    try:
+        while True:
+            # Receive audio data (can be bytes or text)
+            # Frontend should send Blob/ArrayBuffer which comes as bytes
+            data = await websocket.receive_bytes()
+            
+            if not data:
+                break
+                
+            buffer.extend(data)
+            
+            # If buffer is large enough, create a chunk
+            if len(buffer) >= CHUNK_SIZE:
+                # Take a chunk
+                chunk_bytes = buffer[:CHUNK_SIZE]
+                buffer = buffer[CHUNK_SIZE:]
+                
+                # Base64 encode
+                chunk_b64 = base64.b64encode(chunk_bytes).decode('utf-8')
+                
+                chunk = AudioChunk(
+                    session_id=session_id,
+                    chunk_data=chunk_b64,
+                    timestamp=datetime.now(),
+                    sequence_number=sequence_number
+                )
+                
+                # Send to Kafka
+                chunk_dict = chunk.model_dump()
+                chunk_dict['timestamp'] = chunk_dict['timestamp'].isoformat()
+                
+                producer.send("audio-chunks", chunk_dict)
+                # We typically don't flush every message for high throughput, 
+                # but for low latency interactive app it might be better, or rely on internal batching with low latency config.
+                # producer.flush() 
+                
+                sequence_number += 1
+                
+    except WebSocketDisconnect:
+        logger.info(f"WebSocket disconnected for session: {session_id}")
+        
+        # Process remaining buffer info if needed
+        if len(buffer) > 0:
+            chunk_b64 = base64.b64encode(buffer).decode('utf-8')
+            chunk = AudioChunk(
+                session_id=session_id,
+                chunk_data=chunk_b64,
+                timestamp=datetime.now(),
+                sequence_number=sequence_number
+            )
+            chunk_dict = chunk.model_dump()
+            chunk_dict['timestamp'] = chunk_dict['timestamp'].isoformat()
+            producer.send("audio-chunks", chunk_dict)
+            producer.flush()
+            
+    except Exception as e:
+        logger.error(f"Error in WebSocket stream: {e}", exc_info=True)
+        try:
+            await websocket.close(code=1011)
+        except:
+            pass
+            
+    finally:
+        logger.info(f"Stream ended for session: {session_id}")
 
 
 if __name__ == "__main__":

@@ -1,4 +1,4 @@
-import React, { useMemo, useRef, useEffect } from "react";
+import { useMemo, useRef, useEffect } from "react";
 import { GoogleMap, useLoadScript, OverlayView } from "@react-google-maps/api";
 import "./MapPanel.css";
 // IMPORT YOUR NEW COMPONENT

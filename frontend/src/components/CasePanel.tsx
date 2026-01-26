@@ -1,5 +1,4 @@
 // CasesPanel.tsx
-import React from "react";
 import "./CasePanel.css";
 import CaseCard from "./CaseCard"; // <--- IMPORT THE NEW COMPONENT
 import { CaseInfo, CasePriority } from "./types"; // <--- IMPORT SHARED TYPES
@@ -69,7 +68,7 @@ const priorityCounts: PriorityCounts = mockCases.reduce((acc, c) => {
 	return acc;
 }, {} as PriorityCounts);
 
-export type ActiveView = "Ambulances" | "Cases";
+export type ActiveView = "Ambulances" | "Cases" | "Transcripts";
 
 interface PanelProps {
 	activeView: ActiveView;
@@ -96,9 +95,8 @@ export default function CasesPanel({
 							return (
 								<button
 									key={priority}
-									className={`filter ${priority.toLowerCase()} ${
-										priorityColorMap[priority]
-									}`}
+									className={`filter ${priority.toLowerCase()} ${priorityColorMap[priority]
+										}`}
 								>
 									{count} {priority}
 								</button>
@@ -123,20 +121,25 @@ export default function CasesPanel({
 			{/* Bottom Navigation */}
 			<div className="bottom-nav">
 				<button
-					className={`nav-item ${
-						activeView === "Ambulances" ? "active" : ""
-					}`}
+					className={`nav-item ${activeView === "Ambulances" ? "active" : ""
+						}`}
 					onClick={() => handleViewChange("Ambulances")}
 				>
 					<span className="emoji">🚑</span> Ambulances
 				</button>
 				<button
-					className={`nav-item ${
-						activeView === "Cases" ? "active" : ""
-					}`}
+					className={`nav-item ${activeView === "Cases" ? "active" : ""
+						}`}
 					onClick={() => handleViewChange("Cases")}
 				>
 					<span className="emoji">⚠️</span> Cases
+				</button>
+				<button
+					className={`nav-item ${activeView === "Transcripts" ? "active" : ""
+						}`}
+					onClick={() => handleViewChange("Transcripts")}
+				>
+					<span className="emoji">📝</span> Transcripts
 				</button>
 			</div>
 		</div>

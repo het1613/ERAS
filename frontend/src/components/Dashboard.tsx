@@ -1,12 +1,12 @@
 import { useState } from "react";
-// import TranscriptPanel from "./TranscriptPanel"; // Assuming this is not needed now
+import TranscriptPanel from "./TranscriptPanel";
 import MapPanel from "./MapPanel";
 import "./Dashboard.css";
 import AmbulancePanel, { UnitInfo } from "./AmbulancePanel";
 import CasesPanel from "./CasePanel";
 
 // Define the two possible views for type safety
-type ActiveView = "Ambulances" | "Cases";
+type ActiveView = "Ambulances" | "Cases" | "Transcripts";
 
 const mockUnits: UnitInfo[] = [
 	{
@@ -61,9 +61,18 @@ const Dashboard = () => {
 					onUnitClick={(unit) => setFocusedUnit(unit)}
 				/>
 			);
-		} else {
+		} else if (activeView === "Cases") {
 			return (
 				<CasesPanel
+					activeView={activeView}
+					handleViewChange={handleViewChange}
+				/>
+			);
+		} else {
+			return (
+				<TranscriptPanel
+					selectedSessionId={selectedSessionId}
+					onSessionSelect={setSelectedSessionId}
 					activeView={activeView}
 					handleViewChange={handleViewChange}
 				/>
@@ -74,6 +83,11 @@ const Dashboard = () => {
 	return (
 		<div className="dashboard">
 			<div className="dashboard-left">
+				{/* 
+                    If the navigation is inside the panels, we need to ensure TranscriptPanel also has it.
+                    Or we should move navigation here.
+                    Let's see where the navigation is. 
+                */}
 				{/* Render the selected panel based on state */}
 				{renderLeftPanel()}
 			</div>
