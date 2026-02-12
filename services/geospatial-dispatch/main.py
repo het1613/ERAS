@@ -16,6 +16,7 @@ from fastapi.middleware.cors import CORSMiddleware
 
 from shared.types import Vehicle, AssignmentSuggestion, Incident
 from optimization import run_weighted_dispatch_with_hospitals, find_best_ambulance_for_incident
+from vehicle_tracker import VehicleLocationTracker
 
 # Add parent directory to path to access shared module
 parent_dir = os.path.abspath(os.path.join(os.path.dirname(__file__), '../../'))
@@ -96,6 +97,15 @@ MOCK_INCIDENTS = [
     {"id": 7, "lat": 43.3456, "lon": -80.7593, "weight": 16},
 ]
 
+# Vehicle location tracker (updates positions from Kafka)
+vehicle_tracker = VehicleLocationTracker(MOCK_VEHICLES)
+
+
+@app.on_event("startup")
+async def startup_event():
+    vehicle_tracker.start_consumer()
+
+
 # In-memory storage for all incoming incidents
 TRACKED_INCIDENTS = []
 
@@ -138,10 +148,11 @@ async def get_vehicles(status: Optional[str] = None):
     Returns:
         List of vehicles
     """
+    vehicle_tracker.update_vehicle_positions()
     vehicles = MOCK_VEHICLES
     if status:
         vehicles = [v for v in vehicles if v.status == status]
-    
+
     return {
         "vehicles": [v.model_dump() for v in vehicles]
     }
@@ -158,10 +169,11 @@ async def get_vehicle(vehicle_id: str):
     Returns:
         Vehicle details
     """
+    vehicle_tracker.update_vehicle_positions()
     vehicle = next((v for v in MOCK_VEHICLES if v.id == vehicle_id), None)
     if not vehicle:
         raise HTTPException(status_code=404, detail="Vehicle not found")
-    
+
     return vehicle.model_dump()
 
 
@@ -170,6 +182,8 @@ async def find_best_assignment(incident: Incident):
     """
     Find the best vehicle for a single incident, considering the current global state.
     """
+    vehicle_tracker.update_vehicle_positions()
+
     # Assign a unique ID to the new incident for tracking
     new_incident_id = str(uuid.uuid4())
     

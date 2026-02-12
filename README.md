@@ -27,8 +27,8 @@ The system consists of **5 Python microservices**, **1 React frontend**, and sup
 
 4. **Geospatial Dispatch Service** (`services/geospatial-dispatch/`)
    - Manages vehicle tracking and locations
-   - Provides vehicle assignment recommendations
-   - Handles route suggestions
+   - Consumes real-time vehicle positions from Kafka (`vehicle-locations` topic)
+   - Provides vehicle assignment recommendations via weighted ILP optimization
    - Port: `8002`
 
 5. **Dashboard API Service** (`services/dashboard-api/`)
@@ -78,6 +78,7 @@ The system uses the following Kafka topics for event-driven communication:
 - **`audio-chunks`**: Raw audio data chunks published by Audio Ingestion Service
 - **`transcripts`**: Transcribed text from Audio Processing Service
 - **`suggestions`**: AI-generated suggestions from Suggestion Engine
+- **`vehicle-locations`**: Real-time GPS positions consumed by Geospatial Dispatch Service (key: vehicle ID, value: `{vehicle_id, lat, lon, timestamp}`)
 
 Topics are automatically created when messages are first published (via `KAFKA_AUTO_CREATE_TOPICS_ENABLE: "true"`).
 
@@ -102,6 +103,8 @@ ERAS/
 ├── shared/                     # Shared Python utilities
 │   ├── types.py                # Data models (Pydantic)
 │   └── kafka_client.py         # Kafka producer/consumer helpers
+├── scripts/                    # Development/demo scripts
+│   └── simulate_vehicle_locations.py  # GPS simulator for vehicle tracking
 ├── infrastructure/             # Infrastructure configuration
 │   └── postgres/
 │       └── init.sql            # Database schema
@@ -153,6 +156,7 @@ Key environment variables (with defaults):
 | `POSTGRES_USER` | `eras_user` | PostgreSQL username |
 | `POSTGRES_PASSWORD` | `eras_pass` | PostgreSQL password |
 | `KAFKA_BOOTSTRAP_SERVERS` | `kafka:29092` | Kafka broker address (internal) |
+| `KAFKA_CONSUMER_GROUP_ID` | varies per service | Kafka consumer group ID |
 | `GEOSPATIAL_DISPATCH_URL` | `http://geospatial-dispatch:8002` | Geospatial service URL (internal) |
 
 ## How to Run
@@ -245,11 +249,11 @@ docker-compose down -v
 
 ### Geospatial Dispatch (`http://localhost:8002`)
 - `GET /health` - Health check
-- `GET /vehicles` - List vehicles (with optional `?status=available` filter)
-- `GET /vehicles/{id}` - Get specific vehicle
-- `GET /assignments/{session_id}` - Get/generate vehicle assignment
-  - Optional query params: `?lat=43.4643&lon=-80.5204`
-- `POST /assignments/{session_id}/accept` - Accept vehicle assignment
+- `GET /vehicles` - List vehicles with live positions (optional `?status=available` filter)
+- `GET /vehicles/{id}` - Get specific vehicle with live position
+- `POST /assignments/find-best` - Find optimal ambulance for a new incident (`{"lat", "lon", "weight"}`)
+- `GET /assignments/{suggestion_id}` - Retrieve a previous assignment suggestion
+- `POST /assignments/{suggestion_id}/accept` - Accept assignment (marks vehicle as dispatched)
 
 ## Development
 

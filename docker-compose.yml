@@ -109,6 +109,7 @@ services:
       - "8002:8002"
     environment:
       KAFKA_BOOTSTRAP_SERVERS: kafka:29092
+      KAFKA_CONSUMER_GROUP_ID: geospatial-dispatch-service
     depends_on:
       kafka:
         condition: service_healthy

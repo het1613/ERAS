@@ -40,6 +40,14 @@ class Vehicle(BaseModel):
     vehicle_type: str  # "ambulance", "fire_truck", "police"
 
 
+class VehicleLocation(BaseModel):
+    """Represents a real-time vehicle location update from Kafka."""
+    vehicle_id: str
+    lat: float
+    lon: float
+    timestamp: datetime
+
+
 class AssignmentSuggestion(BaseModel):
     """Represents a suggested vehicle assignment for an incident."""
     suggestion_id: str
