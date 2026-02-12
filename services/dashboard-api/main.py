@@ -16,7 +16,7 @@ from fastapi.middleware.cors import CORSMiddleware
 import httpx
 
 from shared.kafka_client import create_consumer
-from shared.types import Transcript, Suggestion
+from shared.types import Transcript, Suggestion, VehicleLocation
 
 # Add parent directory to path to access shared module
 parent_dir = os.path.abspath(os.path.join(os.path.dirname(__file__), '../../'))
@@ -289,6 +289,33 @@ def process_suggestion_message(message_value: dict):
         logger.error(f"Error processing suggestion message: {e}", exc_info=True)
 
 
+def process_vehicle_location_message(message_value: dict):
+    """Process a vehicle location message from Kafka."""
+    try:
+        if isinstance(message_value.get('timestamp'), str):
+            message_value['timestamp'] = datetime.fromisoformat(message_value['timestamp'])
+
+        location = VehicleLocation(**message_value)
+
+        logger.info(f"Processed vehicle location for: {location.vehicle_id}")
+
+        location_dict = location.model_dump()
+        location_dict['timestamp'] = location_dict['timestamp'].isoformat()
+
+        global event_loop
+        if event_loop and event_loop.is_running():
+            asyncio.run_coroutine_threadsafe(
+                manager.broadcast({
+                    "type": "vehicle_location",
+                    "data": location_dict
+                }),
+                event_loop
+            )
+
+    except Exception as e:
+        logger.error(f"Error processing vehicle location message: {e}", exc_info=True)
+
+
 def kafka_consumer_thread():
     """Run Kafka consumer in a separate thread to avoid blocking the event loop."""
     bootstrap_servers = os.getenv("KAFKA_BOOTSTRAP_SERVERS", "kafka:29092")
@@ -297,7 +324,7 @@ def kafka_consumer_thread():
     
     try:
         consumer = create_consumer(
-            topics=["transcripts", "suggestions"],
+            topics=["transcripts", "suggestions", "vehicle-locations"],
             group_id="dashboard-api-service",
             bootstrap_servers=bootstrap_servers
         )
@@ -313,6 +340,8 @@ def kafka_consumer_thread():
                     process_transcript_message(message_value)
                 elif topic == "suggestions":
                     process_suggestion_message(message_value)
+                elif topic == "vehicle-locations":
+                    process_vehicle_location_message(message_value)
                     
             except Exception as e:
                 logger.error(f"Error processing Kafka message: {e}", exc_info=True)

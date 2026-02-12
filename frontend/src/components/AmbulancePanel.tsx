@@ -10,6 +10,14 @@ export interface UnitInfo {
 	coords: string;
 }
 
+export interface VehicleData {
+	id: string;
+	lat: number;
+	lon: number;
+	status: string;
+	vehicle_type: string;
+}
+
 // Define the possible views (make sure this is consistent with Dashboard.tsx)
 export type ActiveView = "Ambulances" | "Cases" | "Transcripts";
 

@@ -65,8 +65,10 @@ Kafka: transcripts topic
 Suggestion Engine ──→ Kafka: suggestions topic
     ↓                                         ↓
 Dashboard API ←──────────────────────────────┘
-    ↓
-WebSocket → Frontend Dashboard
+    ↑                                         ↓
+Kafka: vehicle-locations topic          WebSocket → Frontend Dashboard
+    ↑                                         ↓
+GPS Simulator / Real Devices            Map markers + sidebar update in real time
     ↓
 Geospatial Dispatch Service (for vehicle assignments)
 ```
@@ -96,6 +98,7 @@ ERAS/
 ├── frontend/                   # React application
 │   ├── src/
 │   │   ├── components/         # React components
+│   │   ├── hooks/              # Custom React hooks (useVehicleUpdates, etc.)
 │   │   ├── App.tsx             # Main app component
 │   │   └── main.tsx            # Entry point
 │   ├── package.json
@@ -221,7 +224,7 @@ docker-compose down -v
 - `GET /sessions/{id}/suggestions` - Get suggestions for a session
 - `GET /sessions/{id}/assignment` - Get vehicle assignment for a session
 - `GET /vehicles` - Get all vehicles (proxied from geospatial service)
-- `WS /ws` - WebSocket endpoint for real-time updates
+- `WS /ws` - WebSocket endpoint for real-time updates (transcripts, suggestions, vehicle locations)
 
 ### Audio Ingestion (`http://localhost:8001`)
 - `GET /health` - Health check
