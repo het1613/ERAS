@@ -36,7 +36,49 @@ The service exposes the following endpoints:
 - `GET /assignments/{suggestion_id}`: Retrieves a previously generated assignment suggestion by its suggestion ID.
 - `POST /assignments/{suggestion_id}/accept`: Marks the vehicle in the suggested assignment as "dispatched", making it unavailable for future assignments.
 
-**Note**: The service currently operates with mock data for vehicles, incidents, and hospitals, which is defined in `main.py`.
+## Real-Time Vehicle Location Tracking
+
+Vehicle positions update in real-time via the `vehicle-locations` Kafka topic. This is handled by `vehicle_tracker.py`.
+
+### Architecture
+
+- `VehicleLocationTracker` (in `vehicle_tracker.py`) runs a Kafka consumer in a background daemon thread
+- Maintains a thread-safe `dict` of latest positions (`threading.Lock`-protected)
+- `update_vehicle_positions()` is called at the top of `get_vehicles()`, `get_vehicle()`, and `find_best_assignment()` to patch `Vehicle.lat`/`Vehicle.lon` in-place before any reads
+- `optimization.py` requires **zero changes** -- it reads `v.lat`/`v.lon` from Vehicle objects which are updated in-place
+- **Graceful degradation**: if Kafka is unavailable or no messages arrive, vehicles keep their hardcoded starting positions
+
+### Kafka Message Format
+
+```
+Topic: vehicle-locations
+Key: "ambulance-1" (bytes)
+Value: {"vehicle_id": "ambulance-1", "lat": 43.4723, "lon": -80.5449, "timestamp": "2026-01-01T00:00:00"}
+```
+
+Consumer config: `auto_offset_reset="latest"`, group `geospatial-dispatch-service`.
+
+### Vehicle Location Simulator
+
+A standalone script for development/demo that publishes random-walk GPS updates:
+
+```bash
+# From project root (requires kafka-python installed locally)
+KAFKA_BOOTSTRAP_SERVERS=localhost:9092 python scripts/simulate_vehicle_locations.py
+```
+
+Moves each ambulance ~200m every 2 seconds from their initial positions.
+
+### Key Files
+
+| File | Purpose |
+|------|---------|
+| `vehicle_tracker.py` | `VehicleLocationTracker` class -- Kafka consumer thread + position update logic |
+| `main.py` | Instantiates tracker, starts consumer on startup, calls `update_vehicle_positions()` in endpoints |
+| `shared/types.py` | `VehicleLocation` Pydantic model (Kafka message schema) |
+| `scripts/simulate_vehicle_locations.py` | GPS simulator for dev/demo |
+
+**Note**: The service currently operates with mock data for vehicles, incidents, and hospitals, which is defined in `main.py`. Vehicle positions are updated in real-time when the `vehicle-locations` Kafka topic is active.
 
 ## Running the Service for Local Testing
 
@@ -101,4 +143,4 @@ The response will confirm the acceptance:
 - `uvicorn`: ASGI server
 - `pulp`: ILP optimization library
 - `numpy`, `pandas`: For numerical operations
-- `kafka-python`: Included for potential future integration with a Kafka-based event stream.
+- `kafka-python`: Used for real-time vehicle location tracking via Kafka consumer
