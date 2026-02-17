@@ -520,6 +520,55 @@ def process_vehicle_dispatch_message(message_value: dict):
         logger.error(f"Error processing vehicle dispatch message: {e}", exc_info=True)
 
 
+def process_vehicle_arrival_message(message_value: dict):
+    """Process a vehicle arrival event: mark incident as resolved and broadcast update."""
+    try:
+        vehicle_id = message_value.get("vehicle_id")
+        incident_id = message_value.get("incident_id")
+
+        if not incident_id:
+            return
+
+        logger.info(f"Vehicle {vehicle_id} arrived at incident {incident_id}, resolving...")
+
+        # Mark the incident as resolved in DB
+        conn = get_connection()
+        try:
+            with conn.cursor() as cur:
+                cur.execute(
+                    "UPDATE incidents SET status = 'resolved', updated_at = CURRENT_TIMESTAMP WHERE id = %s",
+                    (incident_id,)
+                )
+            conn.commit()
+
+            # Read back the full row to broadcast
+            with conn.cursor() as cur:
+                cur.execute(f"{INCIDENT_SELECT} WHERE id = %s", (incident_id,))
+                row = cur.fetchone()
+                if row:
+                    incident_dict = _row_to_incident_dict(row)
+                else:
+                    return
+        finally:
+            conn.close()
+
+        # Broadcast incident_updated so frontend clears the route polyline
+        global event_loop
+        if event_loop and event_loop.is_running():
+            asyncio.run_coroutine_threadsafe(
+                manager.broadcast({
+                    "type": "incident_updated",
+                    "data": incident_dict
+                }),
+                event_loop
+            )
+
+        logger.info(f"Incident {incident_id} resolved on arrival of {vehicle_id}")
+
+    except Exception as e:
+        logger.error(f"Error processing vehicle arrival message: {e}", exc_info=True)
+
+
 def kafka_consumer_thread():
     """Run Kafka consumer in a separate thread to avoid blocking the event loop."""
     bootstrap_servers = os.getenv("KAFKA_BOOTSTRAP_SERVERS", "kafka:29092")
@@ -528,7 +577,7 @@ def kafka_consumer_thread():
 
     try:
         consumer = create_consumer(
-            topics=["transcripts", "suggestions", "vehicle-locations", "vehicle-dispatches"],
+            topics=["transcripts", "suggestions", "vehicle-locations", "vehicle-dispatches", "vehicle-arrivals"],
             group_id="dashboard-api-service",
             bootstrap_servers=bootstrap_servers
         )
@@ -548,6 +597,8 @@ def kafka_consumer_thread():
                     process_vehicle_location_message(message_value)
                 elif topic == "vehicle-dispatches":
                     process_vehicle_dispatch_message(message_value)
+                elif topic == "vehicle-arrivals":
+                    process_vehicle_arrival_message(message_value)
 
             except Exception as e:
                 logger.error(f"Error processing Kafka message: {e}", exc_info=True)

@@ -7,6 +7,7 @@ import math
 import logging
 import sys
 import uuid
+import threading
 from datetime import datetime
 from typing import Optional
 
@@ -17,7 +18,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 
 from shared.types import Vehicle, AssignmentSuggestion, VehicleDispatchEvent
-from shared.kafka_client import create_producer
+from shared.kafka_client import create_producer, create_consumer
 from shared.db import get_connection
 from optimization import run_weighted_dispatch_with_hospitals
 from vehicle_tracker import VehicleLocationTracker
@@ -117,11 +118,37 @@ def fetch_route_from_osrm(origin_lat: float, origin_lon: float, dest_lat: float,
         return []
 
 
+def arrival_consumer_thread():
+    """Background thread that consumes vehicle-arrivals to reset vehicle status."""
+    try:
+        consumer = create_consumer(
+            topics=["vehicle-arrivals"],
+            group_id="geospatial-arrival-consumer",
+            auto_offset_reset="latest",
+        )
+        logger.info("Arrival consumer started, listening for vehicle-arrivals...")
+        for message in consumer:
+            try:
+                data = message.value
+                vehicle_id = data.get("vehicle_id")
+                if not vehicle_id:
+                    continue
+                vehicle = next((v for v in MOCK_VEHICLES if v.id == vehicle_id), None)
+                if vehicle and vehicle.status == "dispatched":
+                    vehicle.status = "available"
+                    logger.info(f"Vehicle {vehicle_id} arrived, status reset to available")
+            except Exception as e:
+                logger.error(f"Error processing arrival message: {e}")
+    except Exception as e:
+        logger.error(f"Fatal error in arrival consumer: {e}")
+
+
 @app.on_event("startup")
 async def startup_event():
     global kafka_producer
     kafka_producer = create_producer()
     vehicle_tracker.start_consumer()
+    threading.Thread(target=arrival_consumer_thread, daemon=True).start()
 
 
 # In-memory storage for vehicle assignments

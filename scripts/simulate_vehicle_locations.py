@@ -24,6 +24,7 @@ from shared.kafka_client import create_producer, create_consumer
 
 LOCATION_TOPIC = "vehicle-locations"
 DISPATCH_TOPIC = "vehicle-dispatches"
+ARRIVAL_TOPIC = "vehicle-arrivals"
 
 # Same starting positions as MOCK_VEHICLES in geospatial-dispatch/main.py
 VEHICLES = [
@@ -42,7 +43,7 @@ STEP_LON = 0.0025
 SPEED_M_PER_TICK = 66.7
 TICK_SECONDS = 2
 
-# Thread-safe storage for active routes: vehicle_id -> deque of [lat, lon]
+# Thread-safe storage for active routes: vehicle_id -> {"route": deque, "incident_id": str}
 vehicle_routes = {}
 route_lock = threading.Lock()
 
@@ -85,11 +86,15 @@ def dispatch_consumer_thread():
                 vehicle_id = data.get("vehicle_id")
                 route = data.get("route", [])
 
+                incident_id = data.get("incident_id")
                 if not vehicle_id or not route:
                     continue
 
                 with route_lock:
-                    vehicle_routes[vehicle_id] = deque(route)
+                    vehicle_routes[vehicle_id] = {
+                        "route": deque(route),
+                        "incident_id": incident_id,
+                    }
 
                 print(f"[DISPATCH] Received route for {vehicle_id}: {len(route)} waypoints")
 
@@ -144,14 +149,25 @@ def main():
                 mode = "RANDOM"
 
                 with route_lock:
-                    route = vehicle_routes.get(vid)
+                    entry = vehicle_routes.get(vid)
 
-                if route is not None:
-                    still_going = advance_along_route(v, route)
+                if entry is not None:
+                    still_going = advance_along_route(v, entry["route"])
                     if not still_going:
-                        # Arrived at destination
+                        # Arrived at destination — publish arrival event
+                        incident_id = entry["incident_id"]
                         with route_lock:
                             del vehicle_routes[vid]
+                        if incident_id:
+                            producer.send(
+                                ARRIVAL_TOPIC,
+                                key=vid.encode("utf-8"),
+                                value={
+                                    "vehicle_id": vid,
+                                    "incident_id": incident_id,
+                                    "timestamp": datetime.now().isoformat(),
+                                },
+                            )
                         print(f"  [{vid}] ARRIVED at destination!")
                         mode = "ARRIVED"
                     else:

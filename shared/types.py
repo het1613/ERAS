@@ -66,6 +66,13 @@ class VehicleDispatchEvent(BaseModel):
     timestamp: datetime
 
 
+class VehicleArrivalEvent(BaseModel):
+    """Published by the simulator when a dispatched vehicle arrives at its incident."""
+    vehicle_id: str
+    incident_id: str
+    timestamp: datetime
+
+
 PRIORITY_WEIGHT_MAP = {
     "Purple": 16,
     "Red": 8,

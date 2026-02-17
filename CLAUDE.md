@@ -46,7 +46,8 @@ Priority-to-weight mapping (auto-set when weight omitted): Purple=16, Red=8, Ora
 2. **List/Get:** `GET /incidents[?status=open]`, `GET /incidents/{id}` on dashboard-api reads from DB
 3. **Update:** `PATCH /incidents/{id}` on dashboard-api updates DB, broadcasts `incident_updated` over WebSocket
 4. **Dispatch:** `POST /assignments/find-best` on geospatial-dispatch accepts `{"incident_id": "..."}`, reads all open incidents from DB, runs ILP optimizer, returns best vehicle, sets incident status to `in_progress`
-5. **Accept:** `POST /assignments/{suggestion_id}/accept` on geospatial-dispatch marks vehicle as dispatched
+5. **Accept:** `POST /assignments/{suggestion_id}/accept` on geospatial-dispatch marks vehicle as dispatched, fetches OSRM route, publishes `vehicle-dispatches` Kafka event
+6. **Arrival:** Simulator publishes `vehicle-arrivals` Kafka event when vehicle reaches destination. Dashboard-api consumes it, marks incident `resolved` in DB, broadcasts `incident_updated` via WebSocket. Geospatial-dispatch consumes it and resets vehicle status to `available`.
 
 Frontend `useIncidents` hook fetches `GET /incidents` on mount, then listens for `incident_created`/`incident_updated` WebSocket messages.
 
@@ -65,7 +66,7 @@ When an assignment is accepted (`POST /assignments/{id}/accept`), geospatial-dis
 **Simulator** (`scripts/simulate_vehicle_locations.py`):
 - Runs a background thread consuming `vehicle-dispatches`; stores route waypoints in a thread-safe `vehicle_routes` dict
 - Each 2s tick: dispatched vehicles advance along waypoints at ~60 km/h (Haversine interpolation); non-dispatched vehicles random-walk
-- On arrival: route is removed, vehicle holds position; prints `[ROUTED]`/`[RANDOM]`/`[ARRIVED]` per vehicle
+- On arrival: route is removed, publishes `VehicleArrivalEvent` to `vehicle-arrivals` Kafka topic, then resumes random walk; prints `[ROUTED]`/`[RANDOM]`/`[ARRIVED]` per vehicle
 - Start with: `KAFKA_BOOTSTRAP_SERVERS=localhost:9092 python scripts/simulate_vehicle_locations.py`
 
 **Dashboard-API**: consumes `vehicle-dispatches`, broadcasts `{type: "vehicle_dispatched", data: {vehicle_id, incident_id, route: [{lat, lng}...]}}` via WebSocket. Route coords are converted from `[lat, lon]` to `{lat, lng}` for Google Maps.
@@ -74,7 +75,7 @@ When an assignment is accepted (`POST /assignments/{id}/accept`), geospatial-dis
 - `useVehicleUpdates` hook: maintains `routeMap` state (Map<vehicleId, LatLngLiteral[]>), handles `vehicle_dispatched` WS messages. Clears route when corresponding incident is resolved (`incident_updated` with `status: "resolved"`), using an `incidentToVehicleRef` mapping.
 - `MapPanel`: renders `<Polyline>` from `@react-google-maps/api` for each active route (blue, 4px stroke). Accepts `routes` prop from `Dashboard.tsx`.
 
-**Key types**: `VehicleDispatchEvent` in `shared/types.py` (vehicle_id, incident_id, incident_lat, incident_lon, route, timestamp).
+**Key types** in `shared/types.py`: `VehicleDispatchEvent` (vehicle_id, incident_id, incident_lat, incident_lon, route, timestamp), `VehicleArrivalEvent` (vehicle_id, incident_id, timestamp).
 
 **Graceful degradation**: if OSRM is unreachable, dispatch still succeeds but no route is published — vehicle falls back to random walk in the simulator.
 
@@ -98,6 +99,7 @@ Env vars (with defaults in docker-compose.yml):
 - `suggestions` — AI suggestions from suggestion-engine
 - `vehicle-locations` — real-time GPS positions (produced by simulator, consumed by dashboard-api + geospatial-dispatch)
 - `vehicle-dispatches` — dispatch events with OSRM routes (produced by geospatial-dispatch on accept, consumed by simulator + dashboard-api)
+- `vehicle-arrivals` — arrival events (produced by simulator on route completion, consumed by dashboard-api to auto-resolve incident + geospatial-dispatch to reset vehicle to available)
 
 ## Testing Endpoints
 
@@ -129,4 +131,4 @@ curl -X POST http://localhost:8002/assignments/{suggestion_id}/accept
 - No authentication on any endpoint
 - ILP optimizer still uses Euclidean distance for assignment scoring; only post-accept routing uses OSRM
 - OSRM uses public demo server (`router.project-osrm.org`) — should self-host for production
-- After arrival, dispatched vehicle holds position indefinitely until incident is manually resolved; no automatic status reset to "available"
+- Arrival auto-resolve depends on simulator running; without it, incidents must be manually resolved via `PATCH /incidents/{id}`
