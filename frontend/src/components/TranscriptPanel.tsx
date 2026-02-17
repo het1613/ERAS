@@ -10,11 +10,17 @@ interface Transcript {
 }
 
 interface Suggestion {
+  id: string
   session_id: string
   suggestion_type: string
   value: string
   status: string
   timestamp: string
+  incident_code: string | null
+  incident_code_description: string | null
+  incident_code_category: string | null
+  priority: string | null
+  confidence: number | null
 }
 
 interface TranscriptPanelProps {
@@ -122,16 +128,15 @@ const TranscriptPanel = ({ selectedSessionId, onSessionSelect, activeView, handl
         } else if (message.type === 'suggestion') {
           const suggestion = message.data as Suggestion
           setSuggestions(prev => {
-            // Check if suggestion already exists (avoid duplicates)
-            const exists = prev.some(s =>
-              s.session_id === suggestion.session_id &&
-              s.suggestion_type === suggestion.suggestion_type &&
-              s.value === suggestion.value &&
-              s.timestamp === suggestion.timestamp
-            )
+            const exists = prev.some(s => s.id === suggestion.id)
             if (exists) return prev
             return [...prev, suggestion]
           })
+        } else if (message.type === 'suggestion_updated') {
+          const updated = message.data as Suggestion
+          setSuggestions(prev =>
+            prev.map(s => s.id === updated.id ? updated : s)
+          )
         }
       } catch (error) {
         console.error('Error parsing WebSocket message:', error)
@@ -217,12 +222,29 @@ const TranscriptPanel = ({ selectedSessionId, onSessionSelect, activeView, handl
               <div className="empty-state">No suggestions yet</div>
             ) : (
               filteredSuggestions.map((suggestion, idx) => (
-                <div key={idx} className={`suggestion-item suggestion-${suggestion.status}`}>
+                <div key={suggestion.id || idx} className={`suggestion-item suggestion-${suggestion.status}`}>
                   <div className="suggestion-header">
-                    <span className="suggestion-type">{suggestion.suggestion_type}</span>
+                    {suggestion.incident_code_category && (
+                      <span className="suggestion-type">{suggestion.incident_code_category}</span>
+                    )}
+                    {suggestion.incident_code && (
+                      <span className="suggestion-code">Code {suggestion.incident_code}</span>
+                    )}
+                    {suggestion.priority && (
+                      <span className={`suggestion-priority priority-${suggestion.priority.toLowerCase()}`}>
+                        {suggestion.priority}
+                      </span>
+                    )}
                     <span className="suggestion-status">{suggestion.status}</span>
                   </div>
-                  <div className="suggestion-value">{suggestion.value}</div>
+                  <div className="suggestion-value">
+                    {suggestion.incident_code_description || suggestion.value}
+                  </div>
+                  {suggestion.confidence != null && (
+                    <div className="suggestion-confidence">
+                      Confidence: {Math.round(suggestion.confidence * 100)}%
+                    </div>
+                  )}
                 </div>
               ))
             )}

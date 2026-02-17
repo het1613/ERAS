@@ -185,8 +185,11 @@ async def websocket_endpoint(websocket: WebSocket):
     except WebSocketDisconnect:
         logger.info(f"WebSocket disconnected for session: {session_id}")
         
-        # Process remaining buffer info if needed
-        if len(buffer) > 0:
+        # Only send remaining buffer if it contains enough audio for meaningful transcription.
+        # At 16kHz 16-bit mono, 1 second = 32000 bytes. Fragments shorter than ~1.5s
+        # are almost always silence/noise and cause Whisper to hallucinate.
+        MIN_REMAINING_BYTES = 16000 * 2 * 1.5  # 1.5 seconds
+        if len(buffer) >= MIN_REMAINING_BYTES:
             chunk_b64 = base64.b64encode(buffer).decode('utf-8')
             chunk = AudioChunk(
                 session_id=session_id,
@@ -198,6 +201,8 @@ async def websocket_endpoint(websocket: WebSocket):
             chunk_dict['timestamp'] = chunk_dict['timestamp'].isoformat()
             producer.send("audio-chunks", chunk_dict)
             producer.flush()
+        elif len(buffer) > 0:
+            logger.info(f"Discarding {len(buffer)} bytes of remaining audio (too short for reliable transcription)")
             
     except Exception as e:
         logger.error(f"Error in WebSocket stream: {e}", exc_info=True)

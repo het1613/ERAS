@@ -20,6 +20,7 @@ import httpx
 from shared.kafka_client import create_consumer
 from shared.types import Transcript, Suggestion, VehicleLocation, PRIORITY_WEIGHT_MAP
 from shared.db import get_connection
+from shared.acr_codes import get_acr_codes_for_api
 
 # Add parent directory to path to access shared module
 parent_dir = os.path.abspath(os.path.join(os.path.dirname(__file__), '../../'))
@@ -48,6 +49,7 @@ app.add_middleware(
 sessions: Dict[str, Dict] = {}
 transcripts_by_session: Dict[str, List[Transcript]] = defaultdict(list)
 suggestions_by_session: Dict[str, List[Suggestion]] = defaultdict(list)
+suggestions_by_id: Dict[str, Suggestion] = {}  # suggestion.id -> Suggestion for O(1) lookup
 
 # Active dispatch routes: vehicle_id -> {incident_id, route: [{lat, lng}, ...]}
 active_routes: Dict[str, Dict] = {}
@@ -110,6 +112,16 @@ class UpdateIncidentRequest(BaseModel):
     weight: Optional[int] = None
     location: Optional[str] = None
     type: Optional[str] = None
+
+
+class AcceptSuggestionRequest(BaseModel):
+    incident_code: Optional[str] = None
+    incident_code_description: Optional[str] = None
+    incident_code_category: Optional[str] = None
+    priority: Optional[str] = None
+    lat: float
+    lon: float
+    location: Optional[str] = None
 
 
 # --- Incident helper functions ---
@@ -445,6 +457,93 @@ async def get_active_routes():
     return {"routes": active_routes}
 
 
+# --- ACR Code & Suggestion Accept/Dismiss endpoints ---
+
+@app.get("/acr-codes")
+async def list_acr_codes():
+    """Return all Ontario ACR Problem Codes for frontend dropdowns."""
+    return {"codes": get_acr_codes_for_api()}
+
+
+@app.post("/suggestions/{suggestion_id}/accept")
+async def accept_suggestion(suggestion_id: str, req: AcceptSuggestionRequest):
+    """
+    Accept a suggestion: apply optional overrides, create an incident, and update status.
+    The incident_created broadcast will trigger auto-dispatch in the frontend.
+    """
+    suggestion = suggestions_by_id.get(suggestion_id)
+    if not suggestion:
+        raise HTTPException(status_code=404, detail="Suggestion not found")
+
+    # Determine final values (user overrides take precedence)
+    final_priority = req.priority or suggestion.priority or "Yellow"
+    code_desc = req.incident_code_description or suggestion.incident_code_description or ""
+    code_cat = req.incident_code_category or suggestion.incident_code_category or ""
+    code_num = req.incident_code or suggestion.incident_code or ""
+    incident_type = f"Code {code_num} - {code_cat}: {code_desc}" if code_num else suggestion.value
+
+    weight = PRIORITY_WEIGHT_MAP.get(final_priority, 2)
+    incident_id = str(uuid.uuid4())
+    now = datetime.now(timezone.utc)
+
+    conn = get_connection()
+    try:
+        with conn.cursor() as cur:
+            cur.execute(
+                """INSERT INTO incidents (id, session_id, lat, lon, location, type, priority, weight, status, reported_at, updated_at)
+                   VALUES (%s, %s, %s, %s, %s, %s, %s, %s, 'open', %s, %s)""",
+                (incident_id, suggestion.session_id, req.lat, req.lon, req.location, incident_type, final_priority, weight, now, now)
+            )
+        conn.commit()
+
+        with conn.cursor() as cur:
+            cur.execute(f"{INCIDENT_SELECT} WHERE id = %s", (incident_id,))
+            row = cur.fetchone()
+            incident_dict = _row_to_incident_dict(row)
+    finally:
+        conn.close()
+
+    # Update suggestion status
+    suggestion.status = "accepted"
+
+    # Broadcast the new incident
+    await manager.broadcast({
+        "type": "incident_created",
+        "data": incident_dict
+    })
+
+    # Broadcast suggestion status change
+    suggestion_dict = suggestion.model_dump()
+    suggestion_dict['timestamp'] = suggestion_dict['timestamp'].isoformat()
+    await manager.broadcast({
+        "type": "suggestion_updated",
+        "data": suggestion_dict
+    })
+
+    logger.info(f"Accepted suggestion {suggestion_id}, created incident {incident_id}")
+    return {"incident": incident_dict, "suggestion_status": "accepted"}
+
+
+@app.post("/suggestions/{suggestion_id}/dismiss")
+async def dismiss_suggestion(suggestion_id: str):
+    """Dismiss a suggestion and broadcast the status change."""
+    suggestion = suggestions_by_id.get(suggestion_id)
+    if not suggestion:
+        raise HTTPException(status_code=404, detail="Suggestion not found")
+
+    suggestion.status = "dismissed"
+
+    suggestion_dict = suggestion.model_dump()
+    suggestion_dict['timestamp'] = suggestion_dict['timestamp'].isoformat()
+    await manager.broadcast({
+        "type": "suggestion_updated",
+        "data": suggestion_dict
+    })
+
+    logger.info(f"Dismissed suggestion {suggestion_id}")
+    return {"status": "dismissed"}
+
+
 @app.websocket("/ws")
 async def websocket_endpoint(websocket: WebSocket):
     """
@@ -511,11 +610,13 @@ def process_suggestion_message(message_value: dict):
 
         suggestion = Suggestion(**message_value)
 
-        # Store suggestion
+        # Store suggestion by session and by ID
         session_id = suggestion.session_id
         suggestions_by_session[session_id].append(suggestion)
+        if suggestion.id:
+            suggestions_by_id[suggestion.id] = suggestion
 
-        logger.info(f"Processed suggestion for session: {session_id}")
+        logger.info(f"Processed suggestion for session: {session_id} (id={suggestion.id})")
 
         # Broadcast to WebSocket clients (schedule in event loop)
         suggestion_dict = suggestion.model_dump()

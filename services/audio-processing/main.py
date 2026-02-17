@@ -84,6 +84,50 @@ def is_valid_wav(data: bytes) -> bool:
     return len(data) >= 4 and data[:4] == b'RIFF'
 
 
+# Common Whisper hallucination phrases on silence/noise.
+# These are well-documented artifacts that Whisper produces when fed silent or near-silent audio,
+# especially when an initial_prompt biases toward certain domains.
+HALLUCINATION_PATTERNS = [
+    "a 911 emergency call",
+    "call 911",
+    "911 emergency",
+    "thank you for watching",
+    "thanks for watching",
+    "thank you for listening",
+    "thanks for listening",
+    "please subscribe",
+    "like and subscribe",
+    "the end",
+    "bye bye",
+    "goodbye",
+    "subtitles by",
+    "transcribed by",
+    "translated by",
+    "you",
+]
+
+
+def is_hallucination(text: str) -> bool:
+    """
+    Check if transcribed text is a known Whisper hallucination.
+    Returns True if the text matches common hallucination patterns.
+    """
+    cleaned = text.strip().lower().rstrip('.')
+    for pattern in HALLUCINATION_PATTERNS:
+        if cleaned == pattern or cleaned == pattern + ".":
+            return True
+    return False
+
+
+def audio_has_speech(audio: np.ndarray, threshold: float = 0.005) -> bool:
+    """
+    Simple energy-based check to determine if audio contains speech.
+    Returns False if the audio is essentially silence.
+    """
+    rms = np.sqrt(np.mean(audio ** 2))
+    return rms > threshold
+
+
 # Global session context to store last transcript for continuity
 session_context = {}
 
@@ -127,9 +171,14 @@ async def stt(audio_chunk: AudioChunk, initial_prompt: str = "") -> str:
             # Load audio using WhisperX utility
             audio = whisperx.load_audio(temp_audio_path)
             
-            # Check if audio has sufficient length (at least 0.1 second at 16kHz)
-            if len(audio) < 1600:
+            # Check if audio has sufficient length (at least 0.5 second at 16kHz)
+            if len(audio) < 8000:
                 logger.debug(f"Audio chunk too short for transcription: {len(audio)} samples")
+                return ""
+            
+            # Check if audio actually contains speech (energy-based)
+            if not audio_has_speech(audio):
+                logger.debug("Audio chunk appears to be silence, skipping transcription")
                 return ""
             
             logger.debug(f"Transcribing audio with {len(audio)} samples ({len(audio)/16000:.2f} seconds)")
@@ -159,6 +208,11 @@ async def stt(audio_chunk: AudioChunk, initial_prompt: str = "") -> str:
             
             # If no text found (silence), return empty string
             if not text:
+                return ""
+            
+            # Filter out known Whisper hallucinations (common on silence/noise)
+            if is_hallucination(text):
+                logger.info(f"Filtered hallucinated transcript: '{text}'")
                 return ""
                 
             return text
@@ -197,9 +251,10 @@ def process_audio_chunk(chunk_data: dict, producer: object) -> None:
 
         logger.info(f"Processing audio chunk for session: {audio_chunk.session_id}")
         
-        # Get context (last transcript) for this session
-        # Initialize with a strong domain prompt if empty to bias the model
-        last_context = session_context.get(audio_chunk.session_id, "Transcript of a 911 emergency call. Caller is reporting an incident.")
+        # Get context (last transcript) for this session.
+        # Use empty string as default - avoid domain-specific prompts that cause
+        # Whisper to hallucinate phrases like "A 911 emergency call" on silence.
+        last_context = session_context.get(audio_chunk.session_id, "")
         
         # STT transcription
         # Use asyncio.run since we are in a sync loop

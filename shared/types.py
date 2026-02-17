@@ -24,11 +24,18 @@ class Transcript(BaseModel):
 
 class Suggestion(BaseModel):
     """Represents an AI-generated suggestion for a dispatch action."""
+    id: str = ""  # Unique identifier for frontend reference
     session_id: str
     suggestion_type: str  # e.g., "incident_code", "alert", "vehicle"
-    value: str  # e.g., "10-70: Fire Alarm"
+    value: str  # Human-readable summary, e.g., "Code 51 - Cardiac: Ischemic"
     timestamp: datetime
-    status: str = "pending"  # "pending", "accepted", "declined", "modified"
+    status: str = "pending"  # "pending", "accepted", "dismissed"
+    # Structured Ontario ACR Problem Code fields
+    incident_code: Optional[str] = None  # ACR code, e.g., "51"
+    incident_code_description: Optional[str] = None  # e.g., "Ischemic"
+    incident_code_category: Optional[str] = None  # e.g., "Cardiac"
+    priority: Optional[str] = None  # MPDS priority: Purple/Red/Orange/Yellow/Green
+    confidence: Optional[float] = None  # 0.0 - 1.0 match confidence
 
 
 class Vehicle(BaseModel):

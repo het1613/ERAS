@@ -1,20 +1,45 @@
-import React, { useEffect, useState, useRef } from 'react';
+import React, { useEffect, useState, useRef, useCallback } from 'react';
 import './CallTaker.css';
 
 interface Transcript {
     session_id: string;
     text: string;
     timestamp: string;
-    sender?: 'caller' | 'operator'; // Optional, defaults to caller if undefined
+    sender?: 'caller' | 'operator';
 }
 
 interface Suggestion {
+    id: string;
     session_id: string;
     suggestion_type: string;
     value: string;
     status: string;
     timestamp: string;
+    incident_code: string | null;
+    incident_code_description: string | null;
+    incident_code_category: string | null;
+    priority: string | null;
+    confidence: number | null;
 }
+
+interface AcrCode {
+    code: string;
+    description: string;
+    category: string;
+    default_priority: string;
+}
+
+type CasePriority = 'Purple' | 'Red' | 'Orange' | 'Yellow' | 'Green';
+
+const PRIORITY_COLORS: Record<CasePriority, string> = {
+    Purple: '#884dff',
+    Red: '#d6455d',
+    Orange: '#e29a00',
+    Yellow: '#d4a700',
+    Green: '#2e994e',
+};
+
+const PRIORITIES: CasePriority[] = ['Purple', 'Red', 'Orange', 'Yellow', 'Green'];
 
 const CallTaker: React.FC = () => {
     const [sessions, setSessions] = useState<string[]>([]);
@@ -22,13 +47,55 @@ const CallTaker: React.FC = () => {
     const [transcripts, setTranscripts] = useState<Transcript[]>([]);
     const [suggestions, setSuggestions] = useState<Suggestion[]>([]);
     const [isConnected, setIsConnected] = useState(false);
+    const [acrCodes, setAcrCodes] = useState<AcrCode[]>([]);
+
+    // Per-suggestion editable overrides: suggestion.id -> { code, priority, lat, lon, location }
+    const [overrides, setOverrides] = useState<Record<string, {
+        incident_code: string;
+        priority: string;
+        lat: string;
+        lon: string;
+        location: string;
+    }>>({});
+
+    const [acceptingId, setAcceptingId] = useState<string | null>(null);
 
     const transcriptsEndRef = useRef<HTMLDivElement>(null);
+    const apiUrl = import.meta.env.VITE_API_URL || 'http://localhost:8000';
+
+    // Fetch ACR codes on mount
+    useEffect(() => {
+        const fetchAcrCodes = async () => {
+            try {
+                const res = await fetch(`${apiUrl}/acr-codes`);
+                const data = await res.json();
+                setAcrCodes(data.codes || []);
+            } catch (error) {
+                console.error('Error fetching ACR codes:', error);
+            }
+        };
+        fetchAcrCodes();
+    }, [apiUrl]);
+
+    // Initialize overrides when a new suggestion arrives
+    const ensureOverride = useCallback((s: Suggestion) => {
+        setOverrides(prev => {
+            if (prev[s.id]) return prev;
+            return {
+                ...prev,
+                [s.id]: {
+                    incident_code: s.incident_code || '',
+                    priority: s.priority || 'Yellow',
+                    lat: '43.4643',
+                    lon: '-80.5205',
+                    location: '',
+                },
+            };
+        });
+    }, []);
 
     // Initial Data Fetch
     useEffect(() => {
-        const apiUrl = import.meta.env.VITE_API_URL || 'http://localhost:8000';
-
         const fetchSessions = async () => {
             try {
                 const response = await fetch(`${apiUrl}/sessions`);
@@ -42,19 +109,16 @@ const CallTaker: React.FC = () => {
                 console.error('Error fetching sessions:', error);
             }
         };
-
         fetchSessions();
-    }, []);
+    }, [apiUrl]);
 
     // WebSocket Connection
     useEffect(() => {
-        const apiUrl = import.meta.env.VITE_API_URL || 'http://localhost:8000';
         const wsUrl = apiUrl.replace(/^http/, 'ws') + '/ws';
         const ws = new WebSocket(wsUrl);
 
         ws.onopen = () => {
             setIsConnected(true);
-            console.log('CallTaker WebSocket connected');
         };
 
         ws.onmessage = (event) => {
@@ -63,18 +127,13 @@ const CallTaker: React.FC = () => {
 
                 if (message.type === 'transcript') {
                     const newTranscript = message.data as Transcript;
-
-                    // Update sessions if new
                     setSessions(prev => {
                         if (!prev.includes(newTranscript.session_id)) {
                             return [newTranscript.session_id, ...prev];
                         }
                         return prev;
                     });
-
-                    // Add transcript
                     setTranscripts(prev => {
-                        // Avoid duplicates
                         const exists = prev.some(t =>
                             t.session_id === newTranscript.session_id &&
                             t.text === newTranscript.text &&
@@ -86,14 +145,16 @@ const CallTaker: React.FC = () => {
                 } else if (message.type === 'suggestion') {
                     const newSuggestion = message.data as Suggestion;
                     setSuggestions(prev => {
-                        const exists = prev.some(s =>
-                            s.session_id === newSuggestion.session_id &&
-                            s.value === newSuggestion.value &&
-                            s.timestamp === newSuggestion.timestamp
-                        );
+                        const exists = prev.some(s => s.id === newSuggestion.id);
                         if (exists) return prev;
                         return [...prev, newSuggestion];
                     });
+                    ensureOverride(newSuggestion);
+                } else if (message.type === 'suggestion_updated') {
+                    const updated = message.data as Suggestion;
+                    setSuggestions(prev =>
+                        prev.map(s => s.id === updated.id ? updated : s)
+                    );
                 }
             } catch (error) {
                 console.error('Error parsing WebSocket message:', error);
@@ -102,23 +163,16 @@ const CallTaker: React.FC = () => {
 
         ws.onclose = () => {
             setIsConnected(false);
-            console.log('CallTaker WebSocket disconnected');
         };
 
         return () => {
             ws.close();
         };
-    }, []);
+    }, [apiUrl, ensureOverride]);
 
     // Fetch history when session changes
     useEffect(() => {
         if (!selectedSessionId) return;
-
-        const apiUrl = import.meta.env.VITE_API_URL || 'http://localhost:8000';
-
-        // We only fetch if we don't have data, or to refresh
-        // For simplicity, we'll fetch and merge/set
-        // In a real app, you might want better caching
 
         const fetchData = async () => {
             try {
@@ -132,30 +186,113 @@ const CallTaker: React.FC = () => {
 
                 if (transData.transcripts) {
                     setTranscripts(prev => {
-                        const currentSessionIds = prev.filter(t => t.session_id !== selectedSessionId);
-                        return [...currentSessionIds, ...transData.transcripts];
+                        const other = prev.filter(t => t.session_id !== selectedSessionId);
+                        return [...other, ...transData.transcripts];
                     });
                 }
 
                 if (suggData.suggestions) {
+                    const newSuggs = suggData.suggestions as Suggestion[];
                     setSuggestions(prev => {
-                        const currentSessionIds = prev.filter(s => s.session_id !== selectedSessionId);
-                        return [...currentSessionIds, ...suggData.suggestions];
+                        const other = prev.filter(s => s.session_id !== selectedSessionId);
+                        return [...other, ...newSuggs];
                     });
+                    newSuggs.forEach(ensureOverride);
                 }
-
             } catch (error) {
                 console.error('Error fetching session data:', error);
             }
         };
 
         fetchData();
-    }, [selectedSessionId]);
+    }, [selectedSessionId, apiUrl, ensureOverride]);
 
     // Auto-scroll to bottom of transcripts
     useEffect(() => {
         transcriptsEndRef.current?.scrollIntoView({ behavior: 'smooth' });
     }, [transcripts, selectedSessionId]);
+
+    const updateOverride = (suggestionId: string, field: string, value: string) => {
+        setOverrides(prev => ({
+            ...prev,
+            [suggestionId]: {
+                ...prev[suggestionId],
+                [field]: value,
+            }
+        }));
+
+        // When code changes, auto-update priority to the code's default
+        if (field === 'incident_code') {
+            const selectedCode = acrCodes.find(c => c.code === value);
+            if (selectedCode) {
+                setOverrides(prev => ({
+                    ...prev,
+                    [suggestionId]: {
+                        ...prev[suggestionId],
+                        incident_code: value,
+                        priority: selectedCode.default_priority,
+                    }
+                }));
+            }
+        }
+    };
+
+    const handleAccept = async (suggestion: Suggestion) => {
+        const override = overrides[suggestion.id];
+        if (!override) return;
+
+        const lat = parseFloat(override.lat);
+        const lon = parseFloat(override.lon);
+        if (isNaN(lat) || isNaN(lon)) {
+            alert('Please enter valid latitude and longitude values.');
+            return;
+        }
+
+        setAcceptingId(suggestion.id);
+
+        // Look up full code details for the override
+        const selectedCode = acrCodes.find(c => c.code === override.incident_code);
+
+        try {
+            const res = await fetch(`${apiUrl}/suggestions/${suggestion.id}/accept`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                    incident_code: override.incident_code || suggestion.incident_code,
+                    incident_code_description: selectedCode?.description || suggestion.incident_code_description,
+                    incident_code_category: selectedCode?.category || suggestion.incident_code_category,
+                    priority: override.priority || suggestion.priority,
+                    lat,
+                    lon,
+                    location: override.location || null,
+                }),
+            });
+
+            if (!res.ok) {
+                const err = await res.json().catch(() => ({}));
+                throw new Error(err.detail || `HTTP ${res.status}`);
+            }
+        } catch (error) {
+            console.error('Error accepting suggestion:', error);
+            alert(error instanceof Error ? error.message : 'Failed to accept suggestion');
+        } finally {
+            setAcceptingId(null);
+        }
+    };
+
+    const handleDismiss = async (suggestion: Suggestion) => {
+        try {
+            const res = await fetch(`${apiUrl}/suggestions/${suggestion.id}/dismiss`, {
+                method: 'POST',
+            });
+            if (!res.ok) {
+                const err = await res.json().catch(() => ({}));
+                throw new Error(err.detail || `HTTP ${res.status}`);
+            }
+        } catch (error) {
+            console.error('Error dismissing suggestion:', error);
+        }
+    };
 
     const activeTranscripts = selectedSessionId
         ? transcripts
@@ -165,9 +302,16 @@ const CallTaker: React.FC = () => {
 
     const activeSuggestions = selectedSessionId
         ? suggestions
-            .filter(s => s.session_id === selectedSessionId)
+            .filter(s => s.session_id === selectedSessionId && s.status === 'pending')
             .sort((a, b) => new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime())
         : [];
+
+    // Group ACR codes by category for the dropdown
+    const codesByCategory: Record<string, AcrCode[]> = {};
+    acrCodes.forEach(c => {
+        if (!codesByCategory[c.category]) codesByCategory[c.category] = [];
+        codesByCategory[c.category].push(c);
+    });
 
     return (
         <div className="call-taker-container">
@@ -239,16 +383,130 @@ const CallTaker: React.FC = () => {
                             Analyzing conversation...
                         </div>
                     ) : (
-                        activeSuggestions.map((s, idx) => (
-                            <div key={idx} className="suggestion-card high-priority">
-                                <span className="suggestion-type">{s.suggestion_type}</span>
-                                <div className="suggestion-content">{s.value}</div>
-                                <div className="suggestion-actions">
-                                    <button className="action-btn">Accept</button>
-                                    <button className="action-btn">Dismiss</button>
+                        activeSuggestions.map((s) => {
+                            const override = overrides[s.id];
+                            const displayPriority = (override?.priority || s.priority || 'Yellow') as CasePriority;
+                            const priorityColor = PRIORITY_COLORS[displayPriority] || '#888';
+                            const confidence = s.confidence != null ? Math.round(s.confidence * 100) : null;
+
+                            return (
+                                <div key={s.id} className="suggestion-card" style={{ borderLeftColor: priorityColor }}>
+                                    {/* Header: Category + Code */}
+                                    <div className="suggestion-card-header">
+                                        {s.incident_code_category && (
+                                            <span className="category-badge">{s.incident_code_category}</span>
+                                        )}
+                                        {s.incident_code && (
+                                            <span className="code-badge">Code {s.incident_code}</span>
+                                        )}
+                                        {confidence !== null && (
+                                            <span className="confidence-badge" title="Match confidence">
+                                                {confidence}%
+                                            </span>
+                                        )}
+                                    </div>
+
+                                    {/* Description */}
+                                    <div className="suggestion-description">
+                                        {s.incident_code_description || s.value}
+                                    </div>
+
+                                    {/* Priority badge */}
+                                    <div className="priority-display">
+                                        <span
+                                            className="priority-dot"
+                                            style={{ backgroundColor: priorityColor }}
+                                        />
+                                        <span className="priority-label" style={{ color: priorityColor }}>
+                                            {displayPriority} Priority
+                                        </span>
+                                    </div>
+
+                                    {/* Editable Fields */}
+                                    {override && (
+                                        <div className="suggestion-edit-fields">
+                                            <div className="edit-row">
+                                                <label>Incident Code</label>
+                                                <select
+                                                    value={override.incident_code}
+                                                    onChange={(e) => updateOverride(s.id, 'incident_code', e.target.value)}
+                                                >
+                                                    <option value="">-- Select --</option>
+                                                    {Object.entries(codesByCategory).map(([category, codes]) => (
+                                                        <optgroup key={category} label={category}>
+                                                            {codes.map(c => (
+                                                                <option key={c.code} value={c.code}>
+                                                                    {c.code} - {c.description}
+                                                                </option>
+                                                            ))}
+                                                        </optgroup>
+                                                    ))}
+                                                </select>
+                                            </div>
+
+                                            <div className="edit-row">
+                                                <label>Priority</label>
+                                                <select
+                                                    value={override.priority}
+                                                    onChange={(e) => updateOverride(s.id, 'priority', e.target.value)}
+                                                    style={{ borderColor: PRIORITY_COLORS[override.priority as CasePriority] || '#ccc' }}
+                                                >
+                                                    {PRIORITIES.map(p => (
+                                                        <option key={p} value={p}>{p}</option>
+                                                    ))}
+                                                </select>
+                                            </div>
+
+                                            <div className="edit-row">
+                                                <label>Location</label>
+                                                <input
+                                                    type="text"
+                                                    placeholder="e.g. 234 Columbia St"
+                                                    value={override.location}
+                                                    onChange={(e) => updateOverride(s.id, 'location', e.target.value)}
+                                                />
+                                            </div>
+
+                                            <div className="edit-row-pair">
+                                                <div className="edit-row half">
+                                                    <label>Lat</label>
+                                                    <input
+                                                        type="text"
+                                                        value={override.lat}
+                                                        onChange={(e) => updateOverride(s.id, 'lat', e.target.value)}
+                                                    />
+                                                </div>
+                                                <div className="edit-row half">
+                                                    <label>Lon</label>
+                                                    <input
+                                                        type="text"
+                                                        value={override.lon}
+                                                        onChange={(e) => updateOverride(s.id, 'lon', e.target.value)}
+                                                    />
+                                                </div>
+                                            </div>
+                                        </div>
+                                    )}
+
+                                    {/* Actions */}
+                                    <div className="suggestion-actions">
+                                        <button
+                                            className="action-btn accept-btn"
+                                            disabled={acceptingId === s.id}
+                                            onClick={() => handleAccept(s)}
+                                        >
+                                            {acceptingId === s.id ? 'Creating...' : 'Accept & Create Incident'}
+                                        </button>
+                                        <button
+                                            className="action-btn dismiss-btn"
+                                            onClick={() => handleDismiss(s)}
+                                        >
+                                            Dismiss
+                                        </button>
+                                    </div>
                                 </div>
-                            </div>
-                        ))
+                            );
+                        })
                     )}
                 </div>
             </div>
