@@ -70,18 +70,18 @@ export function useVehicleUpdates(): UseVehicleUpdatesResult {
 			const msg = JSON.parse(event.data);
 
 			if (msg.type === "vehicle_location") {
-				const { vehicle_id, lat, lon } = msg.data;
+				const { vehicle_id, lat, lon, status } = msg.data;
 				setVehicleMap((prev) => {
 					const next = new Map(prev);
 					const existing = next.get(vehicle_id);
 					if (existing) {
-						next.set(vehicle_id, { ...existing, lat, lon });
+						next.set(vehicle_id, { ...existing, lat, lon, status: status ?? existing.status });
 					} else {
 						next.set(vehicle_id, {
 							id: vehicle_id,
 							lat,
 							lon,
-							status: "available",
+							status: status ?? "available",
 							vehicle_type: "ambulance",
 						});
 					}

@@ -52,6 +52,10 @@ suggestions_by_session: Dict[str, List[Suggestion]] = defaultdict(list)
 # Active dispatch routes: vehicle_id -> {incident_id, route: [{lat, lng}, ...]}
 active_routes: Dict[str, Dict] = {}
 
+# Vehicle status tracking: vehicle_id -> status string
+# Updated on dispatch ("dispatched") and arrival ("available")
+vehicle_statuses: Dict[str, str] = {}
+
 # WebSocket connection manager
 class ConnectionManager:
     def __init__(self):
@@ -543,6 +547,8 @@ def process_vehicle_location_message(message_value: dict):
 
         location_dict = location.model_dump()
         location_dict['timestamp'] = location_dict['timestamp'].isoformat()
+        # Enrich with tracked status so frontend always has current status
+        location_dict['status'] = vehicle_statuses.get(location.vehicle_id, "available")
 
         global event_loop
         if event_loop and event_loop.is_running():
@@ -571,6 +577,10 @@ def process_vehicle_dispatch_message(message_value: dict):
         # Persist active route so it survives frontend refreshes
         if vehicle_id and route:
             active_routes[vehicle_id] = {"incident_id": incident_id, "route": route}
+
+        # Track vehicle status
+        if vehicle_id:
+            vehicle_statuses[vehicle_id] = "dispatched"
 
         logger.info(f"Processed vehicle dispatch for: {vehicle_id} ({len(route)} waypoints)")
 
@@ -601,9 +611,10 @@ def process_vehicle_arrival_message(message_value: dict):
         if not incident_id:
             return
 
-        # Clear the active route for this vehicle
-        if vehicle_id and vehicle_id in active_routes:
-            del active_routes[vehicle_id]
+        # Clear the active route and reset status for this vehicle
+        if vehicle_id:
+            active_routes.pop(vehicle_id, None)
+            vehicle_statuses[vehicle_id] = "available"
 
         logger.info(f"Vehicle {vehicle_id} arrived at incident {incident_id}, resolving...")
 
@@ -638,7 +649,6 @@ def process_vehicle_arrival_message(message_value: dict):
                 }),
                 event_loop
             )
-
         logger.info(f"Incident {incident_id} resolved on arrival of {vehicle_id}")
 
     except Exception as e:
