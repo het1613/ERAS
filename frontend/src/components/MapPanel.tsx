@@ -1,14 +1,24 @@
 import { useMemo, useRef, useEffect } from "react";
-import { GoogleMap, useLoadScript, OverlayView, Polyline } from "@react-google-maps/api";
+import { GoogleMap, useLoadScript, OverlayView, Polyline, Marker } from "@react-google-maps/api";
 import "./MapPanel.css";
 import { AmbulanceMapIcon } from "./AmbulanceMapIcon";
 import { UnitInfo } from "./AmbulancePanel";
+import { CaseInfo, CasePriority } from "./types";
 
 interface MapPanelProps {
 	units: UnitInfo[];
 	focusedUnit: UnitInfo | null;
 	routes?: Array<[string, google.maps.LatLngLiteral[]]>;
+	incidents?: CaseInfo[];
 }
+
+const PRIORITY_COLORS: Record<CasePriority, string> = {
+	Purple: "#884dff",
+	Red: "#d6455d",
+	Orange: "#e29a00",
+	Yellow: "#d4a700",
+	Green: "#2e994e",
+};
 
 const parseCoords = (coordString: string) => {
 	const [lat, lng] = coordString.split(",").map((s) => parseFloat(s.trim()));
@@ -21,7 +31,7 @@ const routePolylineOptions: google.maps.PolylineOptions = {
 	strokeWeight: 4,
 };
 
-export default function MapPanel({ units, focusedUnit, routes = [] }: MapPanelProps) {
+export default function MapPanel({ units, focusedUnit, routes = [], incidents = [] }: MapPanelProps) {
 	const apiKey = import.meta.env.VITE_GOOGLE_MAPS_API_KEY;
 	const { isLoaded } = useLoadScript({ googleMapsApiKey: apiKey! });
 	const mapRef = useRef<google.maps.Map | null>(null);
@@ -73,6 +83,21 @@ export default function MapPanel({ units, focusedUnit, routes = [] }: MapPanelPr
 						key={`route-${vehicleId}`}
 						path={path}
 						options={routePolylineOptions}
+					/>
+				))}
+				{incidents.map((incident) => (
+					<Marker
+						key={`incident-${incident.id}`}
+						position={{ lat: incident.lat, lng: incident.lon }}
+						title={incident.type}
+						icon={{
+							path: google.maps.SymbolPath.CIRCLE,
+							fillColor: PRIORITY_COLORS[incident.priority] ?? "#888",
+							fillOpacity: 1,
+							strokeColor: "#fff",
+							strokeWeight: 2,
+							scale: 10,
+						}}
 					/>
 				))}
 			</GoogleMap>

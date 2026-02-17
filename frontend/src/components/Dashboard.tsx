@@ -5,6 +5,7 @@ import "./Dashboard.css";
 import AmbulancePanel, { UnitInfo, VehicleData } from "./AmbulancePanel";
 import CasesPanel from "./CasePanel";
 import { useVehicleUpdates } from "../hooks/useVehicleUpdates";
+import { useIncidents } from "../hooks/useIncidents";
 
 // Define the two possible views for type safety
 type ActiveView = "Ambulances" | "Cases" | "Transcripts";
@@ -37,6 +38,8 @@ const Dashboard = () => {
 
 	const { vehicles, routes } = useVehicleUpdates();
 	const units = vehicles.map(vehicleToUnit);
+	const { incidents } = useIncidents();
+	const activeIncidents = incidents.filter((i) => i.status !== "resolved");
 
 	// 2. Function to pass down to the navigation buttons
 	const handleViewChange = (view: ActiveView) => {
@@ -87,7 +90,7 @@ const Dashboard = () => {
 				{renderLeftPanel()}
 			</div>
 			<div className="dashboard-right">
-				<MapPanel units={units} focusedUnit={focusedUnit} routes={routes} />
+				<MapPanel units={units} focusedUnit={focusedUnit} routes={routes} incidents={activeIncidents} />
 			</div>
 		</div>
 	);
