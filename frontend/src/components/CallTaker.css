@@ -384,6 +384,22 @@
     background-color: #e2e8f0;
 }
 
+/* ── AI-Extracted Badge ────────────────────────────────────────────── */
+
+.ai-extracted-badge {
+    display: inline-block;
+    font-size: 0.55rem;
+    font-weight: 700;
+    color: #7c3aed;
+    background-color: #ede9fe;
+    padding: 0.1rem 0.35rem;
+    border-radius: 3px;
+    margin-left: 0.35rem;
+    vertical-align: middle;
+    letter-spacing: 0.03em;
+    line-height: 1;
+}
+
 /* ── Empty State ───────────────────────────────────────────────────── */
 
 .empty-state {

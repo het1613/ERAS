@@ -20,6 +20,9 @@ interface Suggestion {
     incident_code_category: string | null;
     priority: string | null;
     confidence: number | null;
+    extracted_location: string | null;
+    extracted_lat: number | null;
+    extracted_lon: number | null;
 }
 
 interface AcrCode {
@@ -77,7 +80,7 @@ const CallTaker: React.FC = () => {
         fetchAcrCodes();
     }, [apiUrl]);
 
-    // Initialize overrides when a new suggestion arrives
+    // Initialize overrides when a new suggestion arrives, using LLM-extracted location if available
     const ensureOverride = useCallback((s: Suggestion) => {
         setOverrides(prev => {
             if (prev[s.id]) return prev;
@@ -86,9 +89,9 @@ const CallTaker: React.FC = () => {
                 [s.id]: {
                     incident_code: s.incident_code || '',
                     priority: s.priority || 'Yellow',
-                    lat: '43.4643',
-                    lon: '-80.5205',
-                    location: '',
+                    lat: s.extracted_lat != null ? String(s.extracted_lat) : '43.4643',
+                    lon: s.extracted_lon != null ? String(s.extracted_lon) : '-80.5205',
+                    location: s.extracted_location || '',
                 },
             };
         });
@@ -155,6 +158,29 @@ const CallTaker: React.FC = () => {
                     setSuggestions(prev =>
                         prev.map(s => s.id === updated.id ? updated : s)
                     );
+                    // Auto-fill location fields if the user hasn't manually edited them
+                    if (updated.extracted_location) {
+                        const loc = updated.extracted_location;
+                        const lat = updated.extracted_lat;
+                        const lon = updated.extracted_lon;
+                        setOverrides(prev => {
+                            const existing = prev[updated.id];
+                            if (!existing) return prev;
+                            const locationUntouched = !existing.location || existing.location === '';
+                            const latUntouched = existing.lat === '43.4643';
+                            const lonUntouched = existing.lon === '-80.5205';
+                            if (!locationUntouched && !latUntouched) return prev;
+                            return {
+                                ...prev,
+                                [updated.id]: {
+                                    ...existing,
+                                    location: locationUntouched ? loc : existing.location,
+                                    lat: latUntouched && lat != null ? String(lat) : existing.lat,
+                                    lon: lonUntouched && lon != null ? String(lon) : existing.lon,
+                                },
+                            };
+                        });
+                    }
                 }
             } catch (error) {
                 console.error('Error parsing WebSocket message:', error);
@@ -458,7 +484,12 @@ const CallTaker: React.FC = () => {
                                             </div>
 
                                             <div className="edit-row">
-                                                <label>Location</label>
+                                                <label>
+                                                    Location
+                                                    {s.extracted_location && (
+                                                        <span className="ai-extracted-badge" title="Auto-extracted from transcript by AI">AI</span>
+                                                    )}
+                                                </label>
                                                 <input
                                                     type="text"
                                                     placeholder="e.g. 234 Columbia St"
@@ -469,7 +500,12 @@ const CallTaker: React.FC = () => {
 
                                             <div className="edit-row-pair">
                                                 <div className="edit-row half">
-                                                    <label>Lat</label>
+                                                    <label>
+                                                        Lat
+                                                        {s.extracted_lat != null && (
+                                                            <span className="ai-extracted-badge" title="Geocoded from AI-extracted location">AI</span>
+                                                        )}
+                                                    </label>
                                                     <input
                                                         type="text"
                                                         value={override.lat}
@@ -477,7 +513,12 @@ const CallTaker: React.FC = () => {
                                                     />
                                                 </div>
                                                 <div className="edit-row half">
-                                                    <label>Lon</label>
+                                                    <label>
+                                                        Lon
+                                                        {s.extracted_lon != null && (
+                                                            <span className="ai-extracted-badge" title="Geocoded from AI-extracted location">AI</span>
+                                                        )}
+                                                    </label>
                                                     <input
                                                         type="text"
                                                         value={override.lon}

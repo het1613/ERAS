@@ -609,24 +609,38 @@ def process_suggestion_message(message_value: dict):
             message_value['timestamp'] = datetime.fromisoformat(message_value['timestamp'])
 
         suggestion = Suggestion(**message_value)
-
-        # Store suggestion by session and by ID
         session_id = suggestion.session_id
-        suggestions_by_session[session_id].append(suggestion)
-        if suggestion.id:
+
+        # Check if this is an update to an existing suggestion (same ID)
+        is_update = suggestion.id and suggestion.id in suggestions_by_id
+
+        if is_update:
+            # Update existing suggestion in-place in the session list
+            old = suggestions_by_id[suggestion.id]
+            session_list = suggestions_by_session.get(session_id, [])
+            for i, s in enumerate(session_list):
+                if s.id == suggestion.id:
+                    session_list[i] = suggestion
+                    break
             suggestions_by_id[suggestion.id] = suggestion
+            logger.info(f"Updated suggestion for session: {session_id} (id={suggestion.id})")
+        else:
+            # New suggestion
+            suggestions_by_session[session_id].append(suggestion)
+            if suggestion.id:
+                suggestions_by_id[suggestion.id] = suggestion
+            logger.info(f"Processed suggestion for session: {session_id} (id={suggestion.id})")
 
-        logger.info(f"Processed suggestion for session: {session_id} (id={suggestion.id})")
-
-        # Broadcast to WebSocket clients (schedule in event loop)
+        # Broadcast to WebSocket clients
         suggestion_dict = suggestion.model_dump()
         suggestion_dict['timestamp'] = suggestion_dict['timestamp'].isoformat()
-        # Use asyncio.run_coroutine_threadsafe to schedule from thread
+        broadcast_type = "suggestion_updated" if is_update else "suggestion"
+
         global event_loop
         if event_loop and event_loop.is_running():
             asyncio.run_coroutine_threadsafe(
                 manager.broadcast({
-                    "type": "suggestion",
+                    "type": broadcast_type,
                     "data": suggestion_dict
                 }),
                 event_loop
