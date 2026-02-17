@@ -35,7 +35,7 @@ const Dashboard = () => {
 		null
 	);
 
-	const { vehicles } = useVehicleUpdates();
+	const { vehicles, routes } = useVehicleUpdates();
 	const units = vehicles.map(vehicleToUnit);
 
 	// 2. Function to pass down to the navigation buttons
@@ -87,7 +87,7 @@ const Dashboard = () => {
 				{renderLeftPanel()}
 			</div>
 			<div className="dashboard-right">
-				<MapPanel units={units} focusedUnit={focusedUnit} />
+				<MapPanel units={units} focusedUnit={focusedUnit} routes={routes} />
 			</div>
 		</div>
 	);

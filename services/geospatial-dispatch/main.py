@@ -11,11 +11,13 @@ from datetime import datetime
 from typing import Optional
 
 import numpy as np
+import requests as http_requests
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 
-from shared.types import Vehicle, AssignmentSuggestion
+from shared.types import Vehicle, AssignmentSuggestion, VehicleDispatchEvent
+from shared.kafka_client import create_producer
 from shared.db import get_connection
 from optimization import run_weighted_dispatch_with_hospitals
 from vehicle_tracker import VehicleLocationTracker
@@ -90,9 +92,35 @@ MOCK_HOSPITALS = np.array([
 # Vehicle location tracker (updates positions from Kafka)
 vehicle_tracker = VehicleLocationTracker(MOCK_VEHICLES)
 
+# Kafka producer for dispatch events
+kafka_producer = None
+
+OSRM_BASE_URL = "https://router.project-osrm.org"
+
+
+def fetch_route_from_osrm(origin_lat: float, origin_lon: float, dest_lat: float, dest_lon: float):
+    """Fetch a driving route from OSRM. Returns list of [lat, lon] pairs, or empty list on failure."""
+    try:
+        # OSRM expects lon,lat order
+        url = f"{OSRM_BASE_URL}/route/v1/driving/{origin_lon},{origin_lat};{dest_lon},{dest_lat}?overview=full&geometries=geojson"
+        resp = http_requests.get(url, timeout=10)
+        resp.raise_for_status()
+        data = resp.json()
+        if data.get("code") != "Ok" or not data.get("routes"):
+            logger.warning(f"OSRM returned no route: {data.get('code')}")
+            return []
+        # GeoJSON coordinates are [lon, lat] — flip to [lat, lon]
+        coords = data["routes"][0]["geometry"]["coordinates"]
+        return [[c[1], c[0]] for c in coords]
+    except Exception as e:
+        logger.error(f"OSRM route fetch failed: {e}")
+        return []
+
 
 @app.on_event("startup")
 async def startup_event():
+    global kafka_producer
+    kafka_producer = create_producer()
     vehicle_tracker.start_consumer()
 
 
@@ -333,6 +361,28 @@ async def accept_assignment(suggestion_id: str):
     # Update incident status in DB
     if incident_id:
         update_incident_status(incident_id, "in_progress")
+
+    # Fetch route from OSRM and publish dispatch event
+    if vehicle and incident_id:
+        incident = get_incident_by_id(incident_id)
+        if incident:
+            route = fetch_route_from_osrm(vehicle.lat, vehicle.lon, incident["lat"], incident["lon"])
+            dispatch_event = VehicleDispatchEvent(
+                vehicle_id=vehicle.id,
+                incident_id=incident_id,
+                incident_lat=incident["lat"],
+                incident_lon=incident["lon"],
+                route=route,
+                timestamp=datetime.now(),
+            )
+            if kafka_producer and route:
+                kafka_producer.send(
+                    "vehicle-dispatches",
+                    key=vehicle.id.encode("utf-8"),
+                    value=dispatch_event.model_dump(mode="json"),
+                )
+                kafka_producer.flush()
+                logger.info(f"Published dispatch event for {vehicle.id} with {len(route)} waypoints")
 
     return {"status": "accepted", "suggestion_id": suggestion_id, "vehicle_id": assignment.suggested_vehicle_id}
 

@@ -490,6 +490,36 @@ def process_vehicle_location_message(message_value: dict):
         logger.error(f"Error processing vehicle location message: {e}", exc_info=True)
 
 
+def process_vehicle_dispatch_message(message_value: dict):
+    """Process a vehicle dispatch message from Kafka and broadcast route to frontend."""
+    try:
+        vehicle_id = message_value.get("vehicle_id")
+        incident_id = message_value.get("incident_id")
+        route_raw = message_value.get("route", [])
+
+        # Convert [lat, lon] pairs to {lat, lng} objects for Google Maps
+        route = [{"lat": point[0], "lng": point[1]} for point in route_raw]
+
+        logger.info(f"Processed vehicle dispatch for: {vehicle_id} ({len(route)} waypoints)")
+
+        global event_loop
+        if event_loop and event_loop.is_running():
+            asyncio.run_coroutine_threadsafe(
+                manager.broadcast({
+                    "type": "vehicle_dispatched",
+                    "data": {
+                        "vehicle_id": vehicle_id,
+                        "incident_id": incident_id,
+                        "route": route,
+                    }
+                }),
+                event_loop
+            )
+
+    except Exception as e:
+        logger.error(f"Error processing vehicle dispatch message: {e}", exc_info=True)
+
+
 def kafka_consumer_thread():
     """Run Kafka consumer in a separate thread to avoid blocking the event loop."""
     bootstrap_servers = os.getenv("KAFKA_BOOTSTRAP_SERVERS", "kafka:29092")
@@ -498,7 +528,7 @@ def kafka_consumer_thread():
 
     try:
         consumer = create_consumer(
-            topics=["transcripts", "suggestions", "vehicle-locations"],
+            topics=["transcripts", "suggestions", "vehicle-locations", "vehicle-dispatches"],
             group_id="dashboard-api-service",
             bootstrap_servers=bootstrap_servers
         )
@@ -516,6 +546,8 @@ def kafka_consumer_thread():
                     process_suggestion_message(message_value)
                 elif topic == "vehicle-locations":
                     process_vehicle_location_message(message_value)
+                elif topic == "vehicle-dispatches":
+                    process_vehicle_dispatch_message(message_value)
 
             except Exception as e:
                 logger.error(f"Error processing Kafka message: {e}", exc_info=True)

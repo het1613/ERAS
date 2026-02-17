@@ -3,7 +3,7 @@ Data models for ERAS system.
 """
 
 from pydantic import BaseModel
-from typing import Optional
+from typing import Optional, List
 from datetime import datetime
 
 
@@ -53,6 +53,16 @@ class AssignmentSuggestion(BaseModel):
     suggestion_id: str
     suggested_vehicle_id: str
     route: str 
+    timestamp: datetime
+
+
+class VehicleDispatchEvent(BaseModel):
+    """Represents a dispatch event sent via Kafka when an assignment is accepted."""
+    vehicle_id: str
+    incident_id: str
+    incident_lat: float
+    incident_lon: float
+    route: List[List[float]]  # List of [lat, lon] pairs
     timestamp: datetime
 
 
