@@ -56,9 +56,31 @@ class AssignmentSuggestion(BaseModel):
     timestamp: datetime
 
 
+PRIORITY_WEIGHT_MAP = {
+    "Purple": 16,
+    "Red": 8,
+    "Orange": 4,
+    "Yellow": 2,
+    "Green": 1,
+}
+
+
 class Incident(BaseModel):
     """Represents a single incident, used as input for targeted dispatch."""
+    id: Optional[str] = None
+    session_id: Optional[str] = None
     lat: float
     lon: float
-    weight: int
+    location: Optional[str] = None
+    type: Optional[str] = None
+    priority: str = "Yellow"
+    weight: int = 0
+    status: str = "open"
+    reported_at: Optional[datetime] = None
+    updated_at: Optional[datetime] = None
+
+    def __init__(self, **data):
+        super().__init__(**data)
+        if self.weight == 0:
+            self.weight = PRIORITY_WEIGHT_MAP.get(self.priority, 2)
 

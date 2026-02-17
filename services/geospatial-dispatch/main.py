@@ -13,9 +13,11 @@ from typing import Optional
 import numpy as np
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
+from pydantic import BaseModel
 
-from shared.types import Vehicle, AssignmentSuggestion, Incident
-from optimization import run_weighted_dispatch_with_hospitals, find_best_ambulance_for_incident
+from shared.types import Vehicle, AssignmentSuggestion
+from shared.db import get_connection
+from optimization import run_weighted_dispatch_with_hospitals
 from vehicle_tracker import VehicleLocationTracker
 
 # Add parent directory to path to access shared module
@@ -85,18 +87,6 @@ MOCK_HOSPITALS = np.array([
     [43.6537, -80.7036]   # Hospital 1
 ])
 
-# Mock incident data
-MOCK_INCIDENTS = [
-    {"id": 0, "lat": 43.2761, "lon": -80.7318, "weight": 8},
-    {"id": 1, "lat": 43.6398, "lon": -80.7308, "weight": 8},
-    {"id": 2, "lat": 43.5205, "lon": -80.6522, "weight": 4},
-    {"id": 3, "lat": 43.5686, "lon": -80.5089, "weight": 8},
-    {"id": 4, "lat": 43.2593, "lon": -80.5692, "weight": 8},
-    {"id": 5, "lat": 43.6865, "lon": -80.6607, "weight": 1},
-    {"id": 6, "lat": 43.6246, "lon": -80.4523, "weight": 4},
-    {"id": 7, "lat": 43.3456, "lon": -80.7593, "weight": 16},
-]
-
 # Vehicle location tracker (updates positions from Kafka)
 vehicle_tracker = VehicleLocationTracker(MOCK_VEHICLES)
 
@@ -106,21 +96,67 @@ async def startup_event():
     vehicle_tracker.start_consumer()
 
 
-# In-memory storage for all incoming incidents
-TRACKED_INCIDENTS = []
-
 # In-memory storage for vehicle assignments
 vehicle_assignments = {}
+
+
+class FindBestRequest(BaseModel):
+    incident_id: str
+
+
+def get_open_incidents():
+    """Fetch all open/in_progress incidents from DB."""
+    conn = get_connection()
+    try:
+        with conn.cursor() as cur:
+            cur.execute(
+                "SELECT id, lat, lon, weight, status FROM incidents WHERE status IN ('open', 'in_progress')"
+            )
+            rows = cur.fetchall()
+            return [{"id": r[0], "lat": float(r[1]), "lon": float(r[2]), "weight": r[3], "status": r[4]} for r in rows]
+    finally:
+        conn.close()
+
+
+def get_incident_by_id(incident_id: str):
+    """Fetch a single incident from DB."""
+    conn = get_connection()
+    try:
+        with conn.cursor() as cur:
+            cur.execute(
+                "SELECT id, lat, lon, weight, status FROM incidents WHERE id = %s",
+                (incident_id,)
+            )
+            row = cur.fetchone()
+            if row:
+                return {"id": row[0], "lat": float(row[1]), "lon": float(row[2]), "weight": row[3], "status": row[4]}
+            return None
+    finally:
+        conn.close()
+
+
+def update_incident_status(incident_id: str, status: str):
+    """Update an incident's status in DB."""
+    conn = get_connection()
+    try:
+        with conn.cursor() as cur:
+            cur.execute(
+                "UPDATE incidents SET status = %s, updated_at = CURRENT_TIMESTAMP WHERE id = %s",
+                (status, incident_id)
+            )
+        conn.commit()
+    finally:
+        conn.close()
 
 
 def calculate_distance(lat1: float, lon1: float, lat2: float, lon2: float) -> float:
     """
     Calculate Euclidean distance between two GPS coordinates.
-        
+
     Args:
         lat1, lon1: First coordinate
         lat2, lon2: Second coordinate
-        
+
     Returns:
         Distance in approximate kilometers
     """
@@ -141,10 +177,10 @@ async def health_check():
 async def get_vehicles(status: Optional[str] = None):
     """
     Get list of vehicles, optionally filtered by status.
-    
+
     Args:
         status: Optional status filter (e.g., "available", "dispatched")
-        
+
     Returns:
         List of vehicles
     """
@@ -162,10 +198,10 @@ async def get_vehicles(status: Optional[str] = None):
 async def get_vehicle(vehicle_id: str):
     """
     Get a specific vehicle by ID.
-    
+
     Args:
         vehicle_id: Vehicle identifier
-        
+
     Returns:
         Vehicle details
     """
@@ -178,68 +214,64 @@ async def get_vehicle(vehicle_id: str):
 
 
 @app.post("/assignments/find-best")
-async def find_best_assignment(incident: Incident):
+async def find_best_assignment(request: FindBestRequest):
     """
-    Find the best vehicle for a single incident, considering the current global state.
+    Find the best vehicle for an incident (by ID), considering the current global state.
+    Reads the target incident and all other open incidents from DB.
     """
     vehicle_tracker.update_vehicle_positions()
 
-    # Assign a unique ID to the new incident for tracking
-    new_incident_id = str(uuid.uuid4())
-    
-    # Create a dictionary for the new incident to store it
-    new_incident_dict = {
-        "id": new_incident_id,
-        "lat": incident.lat,
-        "lon": incident.lon,
-        "weight": incident.weight,
-        "status": "unassigned"  # Track assignment status
-    }
-    
-    # Add the new incident to our persistent list
-    TRACKED_INCIDENTS.append(new_incident_dict)
+    # Look up the target incident from DB
+    target_incident = get_incident_by_id(request.incident_id)
+    if not target_incident:
+        raise HTTPException(status_code=404, detail="Incident not found")
+
+    # Get all open incidents from DB for full optimization context
+    all_open_incidents = get_open_incidents()
 
     # Get all currently available vehicles
     available_vehicles = [v for v in MOCK_VEHICLES if v.status == "available"]
     if not available_vehicles:
         raise HTTPException(status_code=503, detail="No available vehicles to assign")
 
-    # Get all incidents that are not yet assigned
-    unassigned_incidents = [i for i in TRACKED_INCIDENTS if i.get("status") == "unassigned"]
-    
     # Run the full optimization model on the current state
     dispatch_results = run_weighted_dispatch_with_hospitals(
-        available_vehicles, unassigned_incidents, MOCK_HOSPITALS, verbose=True
+        available_vehicles, all_open_incidents, MOCK_HOSPITALS, verbose=True
     )
 
-    # Find the assignment for our specific new incident
-    assignment_for_new_incident = None
-    for round_summary in dispatch_results.get("rounds", []):
-        for assignment in round_summary.get("assignments", []):
-            # The 'incident_id' from the optimizer corresponds to the index in the list
-            # of unassigned_incidents that was passed to it.
-            assigned_incident_index = assignment["incident_id"]
-            if unassigned_incidents[assigned_incident_index]["id"] == new_incident_id:
-                assignment_for_new_incident = assignment
-                break
-        if assignment_for_new_incident:
+    # Find the assignment for our specific target incident
+    assignment_for_target = None
+    # Build index mapping: find the index of our target incident in the all_open_incidents list
+    target_index = None
+    for idx, inc in enumerate(all_open_incidents):
+        if inc["id"] == request.incident_id:
+            target_index = idx
             break
 
-    if not assignment_for_new_incident:
-        raise HTTPException(status_code=404, detail="Could not find a suitable assignment for the new incident.")
+    if target_index is not None:
+        for round_summary in dispatch_results.get("rounds", []):
+            for assignment in round_summary.get("assignments", []):
+                if assignment["incident_id"] == target_index:
+                    assignment_for_target = assignment
+                    break
+            if assignment_for_target:
+                break
 
-    # Mark the incident as "assigned" in our tracked list
-    new_incident_dict["status"] = "assigned"
+    if not assignment_for_target:
+        raise HTTPException(status_code=404, detail="Could not find a suitable assignment for the incident.")
 
-    vehicle_id = assignment_for_new_incident["ambulance_id"]
+    # Mark the incident as in_progress in DB
+    update_incident_status(request.incident_id, "in_progress")
+
+    vehicle_id = assignment_for_target["ambulance_id"]
 
     # Generate a simple route description for the assignment
     route_description = (
-        f"Optimized route for {vehicle_id} to new incident at "
-        f"(lat: {incident.lat:.4f}, lon: {incident.lon:.4f}). "
-        f"Total unweighted distance: {assignment_for_new_incident['unweighted_dist']:.2f} km."
+        f"Optimized route for {vehicle_id} to incident at "
+        f"(lat: {target_incident['lat']:.4f}, lon: {target_incident['lon']:.4f}). "
+        f"Total unweighted distance: {assignment_for_target['unweighted_dist']:.2f} km."
     )
-    
+
     # Generate a unique suggestion ID for this assignment suggestion
     suggestion_id = str(uuid.uuid4())
 
@@ -250,11 +282,14 @@ async def find_best_assignment(incident: Incident):
         route=route_description,
         timestamp=datetime.now()
     )
-    
-    vehicle_assignments[suggestion_id] = assignment_suggestion
-    
+
+    vehicle_assignments[suggestion_id] = {
+        "suggestion": assignment_suggestion,
+        "incident_id": request.incident_id,
+    }
+
     logger.info(f"Generated globally-optimized assignment for suggestion {suggestion_id}: vehicle {vehicle_id}")
-    
+
     return assignment_suggestion.model_dump()
 
 
@@ -265,8 +300,8 @@ async def get_assignment(suggestion_id: str):
     """
     # If assignment already exists, return it
     if suggestion_id in vehicle_assignments:
-        return vehicle_assignments[suggestion_id].model_dump()
-    
+        return vehicle_assignments[suggestion_id]["suggestion"].model_dump()
+
     # If the suggestion_id is not found, raise an error
     raise HTTPException(status_code=404, detail="Assignment not found")
 
@@ -275,27 +310,33 @@ async def get_assignment(suggestion_id: str):
 async def accept_assignment(suggestion_id: str):
     """
     Accept a vehicle assignment (mark vehicle as dispatched).
-    
+
     Args:
         suggestion_id: Suggestion identifier
-        
+
     Returns:
         Confirmation message
     """
     if suggestion_id not in vehicle_assignments:
         raise HTTPException(status_code=404, detail="Assignment not found")
-    
-    assignment = vehicle_assignments[suggestion_id]
+
+    entry = vehicle_assignments[suggestion_id]
+    assignment = entry["suggestion"]
+    incident_id = entry.get("incident_id")
+
     vehicle = next((v for v in MOCK_VEHICLES if v.id == assignment.suggested_vehicle_id), None)
-    
+
     if vehicle:
         vehicle.status = "dispatched"
         logger.info(f"Accepted assignment for suggestion {suggestion_id}: vehicle {vehicle.id} dispatched")
-    
+
+    # Update incident status in DB
+    if incident_id:
+        update_incident_status(incident_id, "in_progress")
+
     return {"status": "accepted", "suggestion_id": suggestion_id, "vehicle_id": assignment.suggested_vehicle_id}
 
 
 if __name__ == "__main__":
     import uvicorn
     uvicorn.run(app, host="0.0.0.0", port=8002)
-
