@@ -1,7 +1,7 @@
 // CasesPanel.tsx
 import "./CasePanel.css";
 import CaseCard from "./CaseCard";
-import { CaseInfo, CasePriority } from "./types";
+import { CasePriority } from "./types";
 import { useIncidents } from "../hooks/useIncidents";
 
 type PriorityCounts = {
@@ -22,11 +22,15 @@ export type ActiveView = "Ambulances" | "Cases" | "Transcripts";
 interface PanelProps {
 	activeView: ActiveView;
 	handleViewChange: (view: ActiveView) => void;
+	onDispatch?: (incidentId: string) => void;
+	dispatchLoading?: boolean;
 }
 
 export default function CasesPanel({
 	activeView,
 	handleViewChange,
+	onDispatch,
+	dispatchLoading,
 }: PanelProps): JSX.Element {
 	const { incidents, loading } = useIncidents();
 
@@ -74,7 +78,7 @@ export default function CasesPanel({
 						<p>No incidents reported.</p>
 					) : (
 						incidents.map((c) => (
-							<CaseCard key={c.id} data={c} />
+							<CaseCard key={c.id} data={c} onDispatch={onDispatch} dispatchLoading={dispatchLoading} />
 						))
 					)}
 				</div>

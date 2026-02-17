@@ -294,3 +294,27 @@
     background: #e0e0e0;
     color: #616161;
 }
+
+/* Dispatch button on CaseCard */
+.dispatch-btn {
+    margin-top: 12px;
+    width: 100%;
+    padding: 8px 0;
+    border: none;
+    border-radius: 10px;
+    background: #2563EB;
+    color: #fff;
+    font-size: 14px;
+    font-weight: 600;
+    cursor: pointer;
+    transition: background 0.15s;
+}
+
+.dispatch-btn:hover:not(:disabled) {
+    background: #1d4ed8;
+}
+
+.dispatch-btn:disabled {
+    opacity: 0.6;
+    cursor: not-allowed;
+}

@@ -3,13 +3,16 @@ import { GoogleMap, useLoadScript, OverlayView, Polyline, Marker, InfoWindow } f
 import "./MapPanel.css";
 import { AmbulanceMapIcon } from "./AmbulanceMapIcon";
 import { UnitInfo } from "./AmbulancePanel";
-import { CaseInfo, CasePriority } from "./types";
+import { CaseInfo, CasePriority, DispatchSuggestion } from "./types";
 
 interface MapPanelProps {
 	units: UnitInfo[];
 	focusedUnit: UnitInfo | null;
 	routes?: Array<[string, google.maps.LatLngLiteral[]]>;
 	incidents?: CaseInfo[];
+	dispatchSuggestion?: DispatchSuggestion | null;
+	onAcceptSuggestion?: () => void;
+	onDeclineSuggestion?: () => void;
 }
 
 const PRIORITY_COLORS: Record<CasePriority, string> = {
@@ -46,7 +49,28 @@ const routePolylineOptions: google.maps.PolylineOptions = {
 	strokeWeight: 4,
 };
 
-export default function MapPanel({ units, focusedUnit, routes = [], incidents = [] }: MapPanelProps) {
+const previewPolylineOptions: google.maps.PolylineOptions = {
+	strokeColor: "#e29a00",
+	strokeOpacity: 0,
+	strokeWeight: 4,
+	icons: [
+		{
+			icon: { path: "M 0,-1 0,1", strokeOpacity: 1, scale: 3 },
+			offset: "0",
+			repeat: "14px",
+		},
+	],
+};
+
+export default function MapPanel({
+	units,
+	focusedUnit,
+	routes = [],
+	incidents = [],
+	dispatchSuggestion,
+	onAcceptSuggestion,
+	onDeclineSuggestion,
+}: MapPanelProps) {
 	const apiKey = import.meta.env.VITE_GOOGLE_MAPS_API_KEY;
 	const { isLoaded } = useLoadScript({ googleMapsApiKey: apiKey! });
 	const mapRef = useRef<google.maps.Map | null>(null);
@@ -94,6 +118,74 @@ export default function MapPanel({ units, focusedUnit, routes = [], incidents = 
 						</OverlayView>
 					);
 				})}
+				{/* Suggestion InfoWindow on the recommended ambulance */}
+				{dispatchSuggestion && (() => {
+					const suggestedUnit = units.find(
+						(u) => u.id.toLowerCase().replace(/\s+/g, "-") === dispatchSuggestion.vehicleId
+					);
+					if (!suggestedUnit) return null;
+					const pos = parseCoords(suggestedUnit.coords);
+					const inc = dispatchSuggestion.incident;
+					const priorityColor = PRIORITY_COLORS[inc.priority as CasePriority] ?? "#888";
+					return (
+						<InfoWindow
+							position={pos}
+							options={{ pixelOffset: new google.maps.Size(0, -30) }}
+							onCloseClick={onDeclineSuggestion}
+						>
+							<div style={{ fontFamily: "sans-serif", minWidth: 200, padding: "4px 0" }}>
+								<div style={{ display: "flex", alignItems: "center", gap: 6, marginBottom: 6 }}>
+									<span style={{
+										width: 10, height: 10, borderRadius: "50%",
+										backgroundColor: priorityColor,
+										display: "inline-block", flexShrink: 0,
+									}} />
+									<span style={{ fontWeight: 700, fontSize: 14, color: "#222" }}>
+										{inc.type}
+									</span>
+								</div>
+								<div style={{ fontSize: 12, fontWeight: 600, color: priorityColor, marginBottom: 4 }}>
+									{inc.priority}
+								</div>
+								<div style={{ fontSize: 12, color: "#555", marginBottom: 8 }}>
+									{inc.location}
+								</div>
+								<div style={{ display: "flex", gap: 8 }}>
+									<button
+										onClick={onAcceptSuggestion}
+										style={{
+											flex: 1, padding: "6px 0", border: "none", borderRadius: 6,
+											background: "#2e994e", color: "#fff", fontWeight: 600,
+											fontSize: 13, cursor: "pointer",
+										}}
+									>
+										Accept
+									</button>
+									<button
+										onClick={onDeclineSuggestion}
+										style={{
+											flex: 1, padding: "6px 0", border: "none", borderRadius: 6,
+											background: "#d6455d", color: "#fff", fontWeight: 600,
+											fontSize: 13, cursor: "pointer",
+										}}
+									>
+										Decline
+									</button>
+								</div>
+							</div>
+						</InfoWindow>
+					);
+				})()}
+
+				{/* Preview route polyline (dashed orange) */}
+				{dispatchSuggestion && dispatchSuggestion.routePreview.length > 0 && (
+					<Polyline
+						key="preview-route"
+						path={dispatchSuggestion.routePreview}
+						options={previewPolylineOptions}
+					/>
+				)}
+
 				{routes.map(([vehicleId, path]) => (
 					<Polyline
 						key={`route-${vehicleId}`}

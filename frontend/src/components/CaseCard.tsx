@@ -29,6 +29,8 @@ const statusLabel: Record<string, string> = {
 // --- Props Interface ---
 interface CaseCardProps {
 	data: CaseInfo;
+	onDispatch?: (incidentId: string) => void;
+	dispatchLoading?: boolean;
 }
 
 function formatTime(isoString: string | undefined): string {
@@ -38,7 +40,7 @@ function formatTime(isoString: string | undefined): string {
 }
 
 // --- The Component ---
-export default function CaseCard({ data }: CaseCardProps) {
+export default function CaseCard({ data, onDispatch, dispatchLoading }: CaseCardProps) {
 	return (
 		<div className="case-card">
 			{/* 1. WARNING ICON */}
@@ -77,6 +79,17 @@ export default function CaseCard({ data }: CaseCardProps) {
 					<span>Reported at {formatTime(data.reported_at)}</span>
 				</div>
 			</div>
+
+			{/* 4. DISPATCH BUTTON */}
+			{data.status === "open" && onDispatch && (
+				<button
+					className="dispatch-btn"
+					disabled={dispatchLoading}
+					onClick={() => onDispatch(data.id)}
+				>
+					{dispatchLoading ? "Finding..." : "Dispatch"}
+				</button>
+			)}
 		</div>
 	);
 }

@@ -179,12 +179,16 @@ def get_incident_by_id(incident_id: str):
     try:
         with conn.cursor() as cur:
             cur.execute(
-                "SELECT id, lat, lon, weight, status FROM incidents WHERE id = %s",
+                "SELECT id, lat, lon, weight, status, type, priority, location FROM incidents WHERE id = %s",
                 (incident_id,)
             )
             row = cur.fetchone()
             if row:
-                return {"id": row[0], "lat": float(row[1]), "lon": float(row[2]), "weight": row[3], "status": row[4]}
+                return {
+                    "id": row[0], "lat": float(row[1]), "lon": float(row[2]),
+                    "weight": row[3], "status": row[4],
+                    "type": row[5], "priority": row[6], "location": row[7],
+                }
             return None
     finally:
         conn.close()
@@ -315,9 +319,6 @@ async def find_best_assignment(request: FindBestRequest):
     if not assignment_for_target:
         raise HTTPException(status_code=404, detail="Could not find a suitable assignment for the incident.")
 
-    # Mark the incident as in_progress in DB
-    update_incident_status(request.incident_id, "in_progress")
-
     vehicle_id = assignment_for_target["ambulance_id"]
 
     # Generate a simple route description for the assignment
@@ -326,6 +327,14 @@ async def find_best_assignment(request: FindBestRequest):
         f"(lat: {target_incident['lat']:.4f}, lon: {target_incident['lon']:.4f}). "
         f"Total unweighted distance: {assignment_for_target['unweighted_dist']:.2f} km."
     )
+
+    # Fetch route preview from OSRM
+    vehicle = next((v for v in MOCK_VEHICLES if v.id == vehicle_id), None)
+    route_preview = []
+    if vehicle:
+        route_preview = fetch_route_from_osrm(
+            vehicle.lat, vehicle.lon, target_incident["lat"], target_incident["lon"]
+        )
 
     # Generate a unique suggestion ID for this assignment suggestion
     suggestion_id = str(uuid.uuid4())
@@ -341,11 +350,22 @@ async def find_best_assignment(request: FindBestRequest):
     vehicle_assignments[suggestion_id] = {
         "suggestion": assignment_suggestion,
         "incident_id": request.incident_id,
+        "route_preview": route_preview,
     }
 
     logger.info(f"Generated globally-optimized assignment for suggestion {suggestion_id}: vehicle {vehicle_id}")
 
-    return assignment_suggestion.model_dump()
+    result = assignment_suggestion.model_dump()
+    result["route_preview"] = route_preview
+    result["incident"] = {
+        "id": target_incident["id"],
+        "type": target_incident.get("type"),
+        "priority": target_incident.get("priority"),
+        "location": target_incident.get("location"),
+        "lat": target_incident["lat"],
+        "lon": target_incident["lon"],
+    }
+    return result
 
 
 @app.get("/assignments/{suggestion_id}")
@@ -389,11 +409,11 @@ async def accept_assignment(suggestion_id: str):
     if incident_id:
         update_incident_status(incident_id, "in_progress")
 
-    # Fetch route from OSRM and publish dispatch event
+    # Use pre-fetched route if available, otherwise fetch from OSRM
     if vehicle and incident_id:
         incident = get_incident_by_id(incident_id)
         if incident:
-            route = fetch_route_from_osrm(vehicle.lat, vehicle.lon, incident["lat"], incident["lon"])
+            route = entry.get("route_preview") or fetch_route_from_osrm(vehicle.lat, vehicle.lon, incident["lat"], incident["lon"])
             dispatch_event = VehicleDispatchEvent(
                 vehicle_id=vehicle.id,
                 incident_id=incident_id,
@@ -412,6 +432,17 @@ async def accept_assignment(suggestion_id: str):
                 logger.info(f"Published dispatch event for {vehicle.id} with {len(route)} waypoints")
 
     return {"status": "accepted", "suggestion_id": suggestion_id, "vehicle_id": assignment.suggested_vehicle_id}
+
+
+@app.post("/assignments/{suggestion_id}/decline")
+async def decline_assignment(suggestion_id: str):
+    """Decline a vehicle assignment suggestion, removing it from memory."""
+    if suggestion_id not in vehicle_assignments:
+        raise HTTPException(status_code=404, detail="Assignment not found")
+
+    del vehicle_assignments[suggestion_id]
+    logger.info(f"Declined assignment suggestion {suggestion_id}")
+    return {"status": "declined", "suggestion_id": suggestion_id}
 
 
 if __name__ == "__main__":

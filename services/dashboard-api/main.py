@@ -49,6 +49,9 @@ sessions: Dict[str, Dict] = {}
 transcripts_by_session: Dict[str, List[Transcript]] = defaultdict(list)
 suggestions_by_session: Dict[str, List[Suggestion]] = defaultdict(list)
 
+# Active dispatch routes: vehicle_id -> {incident_id, route: [{lat, lng}, ...]}
+active_routes: Dict[str, Dict] = {}
+
 # WebSocket connection manager
 class ConnectionManager:
     def __init__(self):
@@ -351,6 +354,65 @@ async def get_session_assignment(session_id: str):
         raise HTTPException(status_code=503, detail="Geospatial service unavailable")
 
 
+class FindBestRequest(BaseModel):
+    incident_id: str
+
+
+@app.post("/assignments/find-best")
+async def proxy_find_best(request: FindBestRequest):
+    """Proxy find-best to geospatial-dispatch."""
+    try:
+        async with httpx.AsyncClient() as client:
+            response = await client.post(
+                f"{GEOSPATIAL_DISPATCH_URL}/assignments/find-best",
+                json=request.model_dump(),
+                timeout=15.0,
+            )
+            response.raise_for_status()
+            return response.json()
+    except httpx.HTTPStatusError as e:
+        raise HTTPException(status_code=e.response.status_code, detail=e.response.json().get("detail", "Error"))
+    except httpx.RequestError as e:
+        logger.error(f"Error proxying find-best: {e}")
+        raise HTTPException(status_code=503, detail="Geospatial service unavailable")
+
+
+@app.post("/assignments/{suggestion_id}/accept")
+async def proxy_accept(suggestion_id: str):
+    """Proxy accept to geospatial-dispatch."""
+    try:
+        async with httpx.AsyncClient() as client:
+            response = await client.post(
+                f"{GEOSPATIAL_DISPATCH_URL}/assignments/{suggestion_id}/accept",
+                timeout=15.0,
+            )
+            response.raise_for_status()
+            return response.json()
+    except httpx.HTTPStatusError as e:
+        raise HTTPException(status_code=e.response.status_code, detail=e.response.json().get("detail", "Error"))
+    except httpx.RequestError as e:
+        logger.error(f"Error proxying accept: {e}")
+        raise HTTPException(status_code=503, detail="Geospatial service unavailable")
+
+
+@app.post("/assignments/{suggestion_id}/decline")
+async def proxy_decline(suggestion_id: str):
+    """Proxy decline to geospatial-dispatch."""
+    try:
+        async with httpx.AsyncClient() as client:
+            response = await client.post(
+                f"{GEOSPATIAL_DISPATCH_URL}/assignments/{suggestion_id}/decline",
+                timeout=5.0,
+            )
+            response.raise_for_status()
+            return response.json()
+    except httpx.HTTPStatusError as e:
+        raise HTTPException(status_code=e.response.status_code, detail=e.response.json().get("detail", "Error"))
+    except httpx.RequestError as e:
+        logger.error(f"Error proxying decline: {e}")
+        raise HTTPException(status_code=503, detail="Geospatial service unavailable")
+
+
 @app.get("/vehicles")
 async def get_vehicles():
     """
@@ -371,6 +433,12 @@ async def get_vehicles():
     except httpx.RequestError as e:
         logger.error(f"Error fetching vehicles from geospatial service: {e}")
         raise HTTPException(status_code=503, detail="Geospatial service unavailable")
+
+
+@app.get("/active-routes")
+async def get_active_routes():
+    """Return all active dispatch routes (survives frontend refresh)."""
+    return {"routes": active_routes}
 
 
 @app.websocket("/ws")
@@ -500,6 +568,10 @@ def process_vehicle_dispatch_message(message_value: dict):
         # Convert [lat, lon] pairs to {lat, lng} objects for Google Maps
         route = [{"lat": point[0], "lng": point[1]} for point in route_raw]
 
+        # Persist active route so it survives frontend refreshes
+        if vehicle_id and route:
+            active_routes[vehicle_id] = {"incident_id": incident_id, "route": route}
+
         logger.info(f"Processed vehicle dispatch for: {vehicle_id} ({len(route)} waypoints)")
 
         global event_loop
@@ -528,6 +600,10 @@ def process_vehicle_arrival_message(message_value: dict):
 
         if not incident_id:
             return
+
+        # Clear the active route for this vehicle
+        if vehicle_id and vehicle_id in active_routes:
+            del active_routes[vehicle_id]
 
         logger.info(f"Vehicle {vehicle_id} arrived at incident {incident_id}, resolving...")
 

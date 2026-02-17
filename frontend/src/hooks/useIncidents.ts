@@ -1,13 +1,19 @@
 import { useState, useEffect, useRef, useCallback } from "react";
 import { CaseInfo } from "../components/types";
 
+interface UseIncidentsOptions {
+	onNewIncident?: (incident: CaseInfo) => void;
+}
+
 interface UseIncidentsResult {
 	incidents: CaseInfo[];
 	connected: boolean;
 	loading: boolean;
 }
 
-export function useIncidents(): UseIncidentsResult {
+export function useIncidents(options?: UseIncidentsOptions): UseIncidentsResult {
+	const onNewIncidentRef = useRef(options?.onNewIncident);
+	onNewIncidentRef.current = options?.onNewIncident;
 	const [incidentMap, setIncidentMap] = useState<Map<string, CaseInfo>>(
 		new Map()
 	);
@@ -50,6 +56,9 @@ export function useIncidents(): UseIncidentsResult {
 					next.set(incident.id, incident);
 					return next;
 				});
+				if (msg.type === "incident_created" && onNewIncidentRef.current) {
+					onNewIncidentRef.current(incident);
+				}
 			}
 		} catch (err) {
 			console.error("Error parsing incident WS message:", err);

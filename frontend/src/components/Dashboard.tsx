@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useState, useCallback } from "react";
 import TranscriptPanel from "./TranscriptPanel";
 import MapPanel from "./MapPanel";
 import "./Dashboard.css";
@@ -6,6 +6,7 @@ import AmbulancePanel, { UnitInfo, VehicleData } from "./AmbulancePanel";
 import CasesPanel from "./CasePanel";
 import { useVehicleUpdates } from "../hooks/useVehicleUpdates";
 import { useIncidents } from "../hooks/useIncidents";
+import { useDispatchSuggestion } from "../hooks/useDispatchSuggestion";
 
 // Define the two possible views for type safety
 type ActiveView = "Ambulances" | "Cases" | "Transcripts";
@@ -38,7 +39,18 @@ const Dashboard = () => {
 
 	const { vehicles, routes } = useVehicleUpdates();
 	const units = vehicles.map(vehicleToUnit);
-	const { incidents } = useIncidents();
+	const { suggestion, loading: dispatchLoading, findBest, accept, decline } = useDispatchSuggestion();
+
+	const handleNewIncident = useCallback(
+		(incident: { id: string; status: string }) => {
+			if (incident.status === "open") {
+				findBest(incident.id);
+			}
+		},
+		[findBest]
+	);
+
+	const { incidents } = useIncidents({ onNewIncident: handleNewIncident });
 	const activeIncidents = incidents.filter((i) => i.status !== "resolved");
 
 	// 2. Function to pass down to the navigation buttons
@@ -64,6 +76,8 @@ const Dashboard = () => {
 				<CasesPanel
 					activeView={activeView}
 					handleViewChange={handleViewChange}
+					onDispatch={findBest}
+					dispatchLoading={dispatchLoading}
 				/>
 			);
 		} else {
@@ -90,7 +104,15 @@ const Dashboard = () => {
 				{renderLeftPanel()}
 			</div>
 			<div className="dashboard-right">
-				<MapPanel units={units} focusedUnit={focusedUnit} routes={routes} incidents={activeIncidents} />
+				<MapPanel
+					units={units}
+					focusedUnit={focusedUnit}
+					routes={routes}
+					incidents={activeIncidents}
+					dispatchSuggestion={suggestion}
+					onAcceptSuggestion={accept}
+					onDeclineSuggestion={decline}
+				/>
 			</div>
 		</div>
 	);

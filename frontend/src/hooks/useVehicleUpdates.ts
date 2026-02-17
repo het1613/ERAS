@@ -23,26 +23,45 @@ export function useVehicleUpdates(): UseVehicleUpdatesResult {
 
 	const apiUrl = import.meta.env.VITE_API_URL || "http://localhost:8000";
 
-	// Fetch initial vehicle list via REST
+	// Fetch initial vehicle list + active routes via REST
 	useEffect(() => {
-		async function fetchVehicles() {
+		async function fetchInitialState() {
 			try {
-				const res = await fetch(`${apiUrl}/vehicles`);
-				if (!res.ok) throw new Error(`HTTP ${res.status}`);
-				const data = await res.json();
-				const vehicles: VehicleData[] = data.vehicles ?? data;
-				const map = new Map<string, VehicleData>();
-				for (const v of vehicles) {
-					map.set(v.id, v);
+				const [vehiclesRes, routesRes] = await Promise.all([
+					fetch(`${apiUrl}/vehicles`),
+					fetch(`${apiUrl}/active-routes`),
+				]);
+
+				if (vehiclesRes.ok) {
+					const data = await vehiclesRes.json();
+					const vehicles: VehicleData[] = data.vehicles ?? data;
+					const map = new Map<string, VehicleData>();
+					for (const v of vehicles) {
+						map.set(v.id, v);
+					}
+					setVehicleMap(map);
 				}
-				setVehicleMap(map);
+
+				if (routesRes.ok) {
+					const data = await routesRes.json();
+					// data.routes is { vehicle_id: { incident_id, route: [{lat,lng},...] } }
+					const routes: Record<string, { incident_id: string; route: google.maps.LatLngLiteral[] }> = data.routes ?? {};
+					const rMap = new Map<string, google.maps.LatLngLiteral[]>();
+					for (const [vehicleId, entry] of Object.entries(routes)) {
+						if (entry.route && entry.route.length > 0) {
+							rMap.set(vehicleId, entry.route);
+							incidentToVehicleRef.current.set(entry.incident_id, vehicleId);
+						}
+					}
+					setRouteMap(rMap);
+				}
 			} catch (err) {
-				console.error("Failed to fetch vehicles:", err);
+				console.error("Failed to fetch initial state:", err);
 			} finally {
 				setLoading(false);
 			}
 		}
-		fetchVehicles();
+		fetchInitialState();
 	}, [apiUrl]);
 
 	// WebSocket for live updates
