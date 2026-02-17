@@ -7,16 +7,19 @@ import logging
 import sys
 import asyncio
 import threading
-from datetime import datetime
-from typing import Dict, List
+import uuid
+from datetime import datetime, timezone
+from typing import Dict, List, Optional
 from collections import defaultdict
 
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
+from pydantic import BaseModel
 import httpx
 
 from shared.kafka_client import create_consumer
-from shared.types import Transcript, Suggestion, VehicleLocation
+from shared.types import Transcript, Suggestion, VehicleLocation, PRIORITY_WEIGHT_MAP
+from shared.db import get_connection
 
 # Add parent directory to path to access shared module
 parent_dir = os.path.abspath(os.path.join(os.path.dirname(__file__), '../../'))
@@ -69,7 +72,7 @@ class ConnectionManager:
             except Exception as e:
                 logger.error(f"Error sending to WebSocket client: {e}")
                 disconnected.append(connection)
-        
+
         # Remove disconnected clients
         for conn in disconnected:
             self.disconnect(conn)
@@ -83,17 +86,188 @@ GEOSPATIAL_DISPATCH_URL = os.getenv("GEOSPATIAL_DISPATCH_URL", "http://geospatia
 event_loop = None
 
 
+# --- Incident request models ---
+
+class CreateIncidentRequest(BaseModel):
+    session_id: Optional[str] = None
+    lat: float
+    lon: float
+    location: Optional[str] = None
+    type: Optional[str] = None
+    priority: str = "Yellow"
+    weight: Optional[int] = None
+
+class UpdateIncidentRequest(BaseModel):
+    status: Optional[str] = None
+    priority: Optional[str] = None
+    weight: Optional[int] = None
+    location: Optional[str] = None
+    type: Optional[str] = None
+
+
+# --- Incident helper functions ---
+
+def _row_to_incident_dict(row) -> dict:
+    """Convert a DB row tuple to an incident dict."""
+    return {
+        "id": row[0],
+        "session_id": row[1],
+        "lat": float(row[2]),
+        "lon": float(row[3]),
+        "location": row[4],
+        "type": row[5],
+        "priority": row[6],
+        "weight": row[7],
+        "status": row[8],
+        "reported_at": row[9].isoformat() if row[9] else None,
+        "updated_at": row[10].isoformat() if row[10] else None,
+    }
+
+INCIDENT_SELECT = "SELECT id, session_id, lat, lon, location, type, priority, weight, status, reported_at, updated_at FROM incidents"
+
+
 @app.get("/health")
 async def health_check():
     """Health check endpoint."""
     return {"status": "healthy", "service": "dashboard-api"}
 
 
+# --- Incident CRUD endpoints ---
+
+@app.get("/incidents")
+async def list_incidents(status: Optional[str] = None):
+    """List all incidents, optionally filtered by status."""
+    conn = get_connection()
+    try:
+        with conn.cursor() as cur:
+            if status:
+                cur.execute(f"{INCIDENT_SELECT} WHERE status = %s ORDER BY reported_at DESC", (status,))
+            else:
+                cur.execute(f"{INCIDENT_SELECT} ORDER BY reported_at DESC")
+            rows = cur.fetchall()
+            return {"incidents": [_row_to_incident_dict(r) for r in rows]}
+    finally:
+        conn.close()
+
+
+@app.get("/incidents/{incident_id}")
+async def get_incident(incident_id: str):
+    """Get a single incident by ID."""
+    conn = get_connection()
+    try:
+        with conn.cursor() as cur:
+            cur.execute(f"{INCIDENT_SELECT} WHERE id = %s", (incident_id,))
+            row = cur.fetchone()
+            if not row:
+                raise HTTPException(status_code=404, detail="Incident not found")
+            return _row_to_incident_dict(row)
+    finally:
+        conn.close()
+
+
+@app.post("/incidents")
+async def create_incident(req: CreateIncidentRequest):
+    """Create a new incident, write to DB, broadcast via WebSocket."""
+    incident_id = str(uuid.uuid4())
+    weight = req.weight if req.weight is not None else PRIORITY_WEIGHT_MAP.get(req.priority, 2)
+    now = datetime.now(timezone.utc)
+
+    conn = get_connection()
+    try:
+        with conn.cursor() as cur:
+            cur.execute(
+                """INSERT INTO incidents (id, session_id, lat, lon, location, type, priority, weight, status, reported_at, updated_at)
+                   VALUES (%s, %s, %s, %s, %s, %s, %s, %s, 'open', %s, %s)""",
+                (incident_id, req.session_id, req.lat, req.lon, req.location, req.type, req.priority, weight, now, now)
+            )
+        conn.commit()
+
+        # Read back the full row
+        with conn.cursor() as cur:
+            cur.execute(f"{INCIDENT_SELECT} WHERE id = %s", (incident_id,))
+            row = cur.fetchone()
+            incident_dict = _row_to_incident_dict(row)
+    finally:
+        conn.close()
+
+    # Broadcast to WebSocket clients
+    await manager.broadcast({
+        "type": "incident_created",
+        "data": incident_dict
+    })
+
+    logger.info(f"Created incident {incident_id}")
+    return incident_dict
+
+
+@app.patch("/incidents/{incident_id}")
+async def update_incident(incident_id: str, req: UpdateIncidentRequest):
+    """Update an incident's fields, write to DB, broadcast via WebSocket."""
+    # Build dynamic SET clause from provided fields
+    updates = []
+    params = []
+    if req.status is not None:
+        updates.append("status = %s")
+        params.append(req.status)
+    if req.priority is not None:
+        updates.append("priority = %s")
+        params.append(req.priority)
+        # Auto-update weight if priority changes and weight not explicitly set
+        if req.weight is None:
+            updates.append("weight = %s")
+            params.append(PRIORITY_WEIGHT_MAP.get(req.priority, 2))
+    if req.weight is not None:
+        updates.append("weight = %s")
+        params.append(req.weight)
+    if req.location is not None:
+        updates.append("location = %s")
+        params.append(req.location)
+    if req.type is not None:
+        updates.append("type = %s")
+        params.append(req.type)
+
+    if not updates:
+        raise HTTPException(status_code=400, detail="No fields to update")
+
+    updates.append("updated_at = CURRENT_TIMESTAMP")
+    params.append(incident_id)
+
+    conn = get_connection()
+    try:
+        with conn.cursor() as cur:
+            cur.execute(
+                f"UPDATE incidents SET {', '.join(updates)} WHERE id = %s",
+                params
+            )
+            if cur.rowcount == 0:
+                raise HTTPException(status_code=404, detail="Incident not found")
+        conn.commit()
+
+        # Read back the updated row
+        with conn.cursor() as cur:
+            cur.execute(f"{INCIDENT_SELECT} WHERE id = %s", (incident_id,))
+            row = cur.fetchone()
+            incident_dict = _row_to_incident_dict(row)
+    finally:
+        conn.close()
+
+    # Broadcast to WebSocket clients
+    await manager.broadcast({
+        "type": "incident_updated",
+        "data": incident_dict
+    })
+
+    logger.info(f"Updated incident {incident_id}")
+    return incident_dict
+
+
+# --- Existing endpoints ---
+
 @app.get("/sessions")
 async def get_sessions():
     """
     Get all active sessions.
-    
+
     Returns:
         List of session summaries
     """
@@ -112,10 +286,10 @@ async def get_sessions():
 async def get_session_transcript(session_id: str):
     """
     Get transcript for a specific session.
-    
+
     Args:
         session_id: Session identifier
-        
+
     Returns:
         List of transcripts for the session
     """
@@ -133,10 +307,10 @@ async def get_session_transcript(session_id: str):
 async def get_session_suggestions(session_id: str):
     """
     Get suggestions for a specific session.
-    
+
     Args:
         session_id: Session identifier
-        
+
     Returns:
         List of suggestions for the session
     """
@@ -155,10 +329,10 @@ async def get_session_assignment(session_id: str):
     """
     Get vehicle assignment for a specific session.
     Fetches from Geospatial Dispatch Service.
-    
+
     Args:
         session_id: Session identifier
-        
+
     Returns:
         Assignment suggestion
     """
@@ -182,7 +356,7 @@ async def get_vehicles():
     """
     Get list of vehicles.
     Fetches from Geospatial Dispatch Service.
-    
+
     Returns:
         List of vehicles
     """
@@ -203,7 +377,7 @@ async def get_vehicles():
 async def websocket_endpoint(websocket: WebSocket):
     """
     WebSocket endpoint for real-time updates.
-    
+
     Clients connect to receive transcripts and suggestions as they arrive.
     """
     await manager.connect(websocket)
@@ -223,21 +397,21 @@ def process_transcript_message(message_value: dict):
         # Parse transcript
         if isinstance(message_value.get('timestamp'), str):
             message_value['timestamp'] = datetime.fromisoformat(message_value['timestamp'])
-        
+
         transcript = Transcript(**message_value)
-        
+
         # Store transcript
         session_id = transcript.session_id
         transcripts_by_session[session_id].append(transcript)
-        
+
         # Create session if it doesn't exist
         if session_id not in sessions:
             sessions[session_id] = {
                 "created_at": transcript.timestamp.isoformat(),
             }
-        
+
         logger.info(f"Processed transcript for session: {session_id}")
-        
+
         # Broadcast to WebSocket clients (schedule in event loop)
         transcript_dict = transcript.model_dump()
         transcript_dict['timestamp'] = transcript_dict['timestamp'].isoformat()
@@ -251,7 +425,7 @@ def process_transcript_message(message_value: dict):
                 }),
                 event_loop
             )
-        
+
     except Exception as e:
         logger.error(f"Error processing transcript message: {e}", exc_info=True)
 
@@ -262,15 +436,15 @@ def process_suggestion_message(message_value: dict):
         # Parse suggestion
         if isinstance(message_value.get('timestamp'), str):
             message_value['timestamp'] = datetime.fromisoformat(message_value['timestamp'])
-        
+
         suggestion = Suggestion(**message_value)
-        
+
         # Store suggestion
         session_id = suggestion.session_id
         suggestions_by_session[session_id].append(suggestion)
-        
+
         logger.info(f"Processed suggestion for session: {session_id}")
-        
+
         # Broadcast to WebSocket clients (schedule in event loop)
         suggestion_dict = suggestion.model_dump()
         suggestion_dict['timestamp'] = suggestion_dict['timestamp'].isoformat()
@@ -284,7 +458,7 @@ def process_suggestion_message(message_value: dict):
                 }),
                 event_loop
             )
-        
+
     except Exception as e:
         logger.error(f"Error processing suggestion message: {e}", exc_info=True)
 
@@ -319,34 +493,34 @@ def process_vehicle_location_message(message_value: dict):
 def kafka_consumer_thread():
     """Run Kafka consumer in a separate thread to avoid blocking the event loop."""
     bootstrap_servers = os.getenv("KAFKA_BOOTSTRAP_SERVERS", "kafka:29092")
-    
+
     logger.info(f"Starting Kafka consumer. Connecting to: {bootstrap_servers}")
-    
+
     try:
         consumer = create_consumer(
             topics=["transcripts", "suggestions", "vehicle-locations"],
             group_id="dashboard-api-service",
             bootstrap_servers=bootstrap_servers
         )
-        
+
         logger.info("Kafka consumer started. Waiting for messages...")
-        
+
         for message in consumer:
             try:
                 topic = message.topic
                 message_value = message.value
-                
+
                 if topic == "transcripts":
                     process_transcript_message(message_value)
                 elif topic == "suggestions":
                     process_suggestion_message(message_value)
                 elif topic == "vehicle-locations":
                     process_vehicle_location_message(message_value)
-                    
+
             except Exception as e:
                 logger.error(f"Error processing Kafka message: {e}", exc_info=True)
                 continue
-                
+
     except Exception as e:
         logger.error(f"Fatal error in Kafka consumer: {e}", exc_info=True)
     finally:
@@ -360,7 +534,7 @@ async def startup_event():
     # Store event loop reference for use in Kafka consumer thread
     global event_loop
     event_loop = asyncio.get_event_loop()
-    
+
     # Start Kafka consumer in a separate thread to avoid blocking the event loop
     kafka_thread = threading.Thread(target=kafka_consumer_thread, daemon=True)
     kafka_thread.start()
@@ -376,4 +550,3 @@ async def shutdown_event():
 if __name__ == "__main__":
     import uvicorn
     uvicorn.run(app, host="0.0.0.0", port=8000)
-

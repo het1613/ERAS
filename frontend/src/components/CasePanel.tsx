@@ -1,59 +1,14 @@
 // CasesPanel.tsx
 import "./CasePanel.css";
-import CaseCard from "./CaseCard"; // <--- IMPORT THE NEW COMPONENT
-import { CaseInfo, CasePriority } from "./types"; // <--- IMPORT SHARED TYPES
-
-// --- Mock Data (Stays here because the parent manages the list) ---
-const mockCases: CaseInfo[] = [
-	{
-		id: "Case-001",
-		priority: "Purple",
-		type: "Cardiac Arrest",
-		location: "234 Columbia Street",
-		reportedTime: "17:35",
-	},
-	{
-		id: "Case-002",
-		priority: "Purple",
-		type: "Cardiac Arrest",
-		location: "234 Columbia Street",
-		reportedTime: "17:35",
-	},
-	{
-		id: "Case-003",
-		priority: "Red",
-		type: "Cardiac Arrest",
-		location: "234 Columbia Street",
-		reportedTime: "17:35",
-	},
-	{
-		id: "Case-004",
-		priority: "Orange",
-		type: "Broken Hand",
-		location: "994 Columbia Street",
-		reportedTime: "17:30",
-	},
-	{
-		id: "Case-005",
-		priority: "Yellow",
-		type: "Flu Symptoms",
-		location: "123 Main Street",
-		reportedTime: "17:20",
-	},
-	{
-		id: "Case-006",
-		priority: "Green",
-		type: "Minor Cuts",
-		location: "456 Side Road",
-		reportedTime: "17:15",
-	},
-];
+import CaseCard from "./CaseCard";
+import { CaseInfo, CasePriority } from "./types";
+import { useIncidents } from "../hooks/useIncidents";
 
 type PriorityCounts = {
 	[key in CasePriority]?: number;
 };
 
-// Map priorities to a display color for buttons (Stays here for the top filters)
+// Map priorities to a display color for buttons
 const priorityColorMap: Record<CasePriority, string> = {
 	Purple: "purple-text",
 	Red: "red-text",
@@ -61,12 +16,6 @@ const priorityColorMap: Record<CasePriority, string> = {
 	Yellow: "yellow-text",
 	Green: "green-text",
 };
-
-// --- Case Counting Logic ---
-const priorityCounts: PriorityCounts = mockCases.reduce((acc, c) => {
-	acc[c.priority] = (acc[c.priority] || 0) + 1;
-	return acc;
-}, {} as PriorityCounts);
 
 export type ActiveView = "Ambulances" | "Cases" | "Transcripts";
 
@@ -79,6 +28,13 @@ export default function CasesPanel({
 	activeView,
 	handleViewChange,
 }: PanelProps): JSX.Element {
+	const { incidents, loading } = useIncidents();
+
+	const priorityCounts: PriorityCounts = incidents.reduce((acc, c) => {
+		acc[c.priority] = (acc[c.priority] || 0) + 1;
+		return acc;
+	}, {} as PriorityCounts);
+
 	return (
 		<div className="dispatch-panel cases-panel">
 			{/* Top Bar with Title */}
@@ -110,11 +66,17 @@ export default function CasesPanel({
 			<div className="active-cases">
 				<h3 className="section-title">Active Cases</h3>
 
-				{/* Case List - NOW MUCH CLEANER! */}
+				{/* Case List */}
 				<div className="case-list">
-					{mockCases.map((c) => (
-						<CaseCard key={c.id} data={c} />
-					))}
+					{loading ? (
+						<p>Loading incidents...</p>
+					) : incidents.length === 0 ? (
+						<p>No incidents reported.</p>
+					) : (
+						incidents.map((c) => (
+							<CaseCard key={c.id} data={c} />
+						))
+					)}
 				</div>
 			</div>
 

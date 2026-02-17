@@ -1,8 +1,8 @@
 // CaseCard.tsx
-import "./CasePanel.css"; // Keep the CSS import so styles work
-import { CaseInfo } from "./types"; // Import the shared type
+import "./CasePanel.css";
+import { CaseInfo } from "./types";
 
-// --- Helper for Colors (Moved here because only the card needs it) ---
+// --- Helper for Colors ---
 const getPriorityColor = (p: string) => {
 	switch (p) {
 		case "Purple":
@@ -20,9 +20,21 @@ const getPriorityColor = (p: string) => {
 	}
 };
 
+const statusLabel: Record<string, string> = {
+	open: "Open",
+	in_progress: "In Progress",
+	resolved: "Resolved",
+};
+
 // --- Props Interface ---
 interface CaseCardProps {
 	data: CaseInfo;
+}
+
+function formatTime(isoString: string | undefined): string {
+	if (!isoString) return "";
+	const d = new Date(isoString);
+	return d.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
 }
 
 // --- The Component ---
@@ -49,6 +61,11 @@ export default function CaseCard({ data }: CaseCardProps) {
 				{data.priority}
 			</div>
 
+			{/* Status badge */}
+			<div className={`case-status-badge status-badge-${data.status}`}>
+				{statusLabel[data.status] || data.status}
+			</div>
+
 			{/* 3. CASE DETAILS */}
 			<div className="case-details-content">
 				<div className="case-row">
@@ -57,7 +74,7 @@ export default function CaseCard({ data }: CaseCardProps) {
 				</div>
 				<div className="case-row">
 					<span className="emoji">🕒</span>
-					<span>Reported at {data.reportedTime}</span>
+					<span>Reported at {formatTime(data.reported_at)}</span>
 				</div>
 			</div>
 		</div>
