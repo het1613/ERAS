@@ -45,15 +45,16 @@ Priority-to-weight mapping (auto-set when weight omitted): Purple=16, Red=8, Ora
 1. **Create:** `POST /incidents` on dashboard-api writes to DB, broadcasts `incident_created` over WebSocket
 2. **List/Get:** `GET /incidents[?status=open]`, `GET /incidents/{id}` on dashboard-api reads from DB
 3. **Update:** `PATCH /incidents/{id}` on dashboard-api updates DB, broadcasts `incident_updated` over WebSocket
-4. **Auto-Dispatch:** Frontend `useIncidents` hook fires `onNewIncident` callback on `incident_created` WS message. Dashboard.tsx passes `findBest` as this callback, auto-triggering dispatch suggestion for every new open incident.
-5. **Find-Best:** `POST /assignments/find-best` runs ILP optimizer, fetches OSRM route preview, returns suggestion with `route_preview` (list of `[lat, lon]`) and `incident` details. Does NOT change incident status. Stores route in `vehicle_assignments` for reuse on accept.
+4. **Auto-Dispatch (server-side):** When call-taker accepts a suggestion (`POST /suggestions/{id}/accept`), dashboard-api creates the incident AND immediately calls geospatial-dispatch `find-best`. The result is broadcast via a `dispatch_suggestion` WebSocket message to all connected Dashboard clients. No client-side auto-dispatch needed.
+5. **Find-Best:** `POST /assignments/find-best` runs ILP optimizer, fetches OSRM route preview, returns suggestion with `route_preview` (list of `[lat, lon]`) and `incident` details. Accepts optional `exclude_vehicles` list to skip previously declined vehicles. Does NOT change incident status. Stores route in `vehicle_assignments` for reuse on accept.
 6. **Accept:** `POST /assignments/{suggestion_id}/accept` sets incident to `in_progress`, marks vehicle as dispatched, reuses pre-fetched route (falls back to OSRM if missing), publishes `vehicle-dispatches` Kafka event.
 7. **Decline:** `POST /assignments/{suggestion_id}/decline` removes suggestion from memory. No status changes.
-8. **Arrival:** Simulator publishes `vehicle-arrivals` Kafka event when vehicle reaches destination. Dashboard-api consumes it, marks incident `resolved` in DB, resets vehicle status to `available`, clears active route, broadcasts `incident_updated` via WebSocket. Geospatial-dispatch consumes it and resets vehicle status to `available`.
+8. **Decline-and-Reassign:** `POST /assignments/{suggestion_id}/decline-and-reassign` declines the current suggestion, adds the vehicle to an exclude list for the incident, and automatically re-runs find-best with excluded vehicles. Broadcasts the new `dispatch_suggestion` via WebSocket. This allows the dispatcher to cycle through available vehicles.
+9. **Arrival:** Simulator publishes `vehicle-arrivals` Kafka event when vehicle reaches destination. Dashboard-api consumes it, marks incident `resolved` in DB, resets vehicle status to `available`, clears active route, broadcasts `incident_updated` via WebSocket. Geospatial-dispatch consumes it and resets vehicle status to `available`.
 
-All three assignment endpoints are proxied through dashboard-api (:8000) so the frontend only talks to one service.
+All assignment endpoints are proxied through dashboard-api (:8000) so the frontend only talks to one service.
 
-Frontend `useIncidents` hook fetches `GET /incidents` on mount, then listens for `incident_created`/`incident_updated` WebSocket messages. Accepts optional `onNewIncident` callback.
+Frontend `useIncidents` hook fetches `GET /incidents` on mount, then listens for `incident_created`/`incident_updated` WebSocket messages.
 
 ## Vehicle Tracking
 
@@ -82,11 +83,12 @@ When an assignment is accepted (`POST /assignments/{id}/accept`), geospatial-dis
 **Dashboard-API**: consumes `vehicle-dispatches`, stores in `active_routes`, broadcasts `{type: "vehicle_dispatched", data: {vehicle_id, incident_id, route: [{lat, lng}...]}}` via WebSocket. Route coords are converted from `[lat, lon]` to `{lat, lng}` for Google Maps.
 
 **Frontend dispatch UI** (`frontend/src/`):
-- `hooks/useDispatchSuggestion.ts` — manages active dispatch suggestion state. Methods: `findBest(incidentId)`, `accept()`, `decline()`. Calls dashboard-api proxy endpoints.
+- `hooks/useDispatchSuggestion.ts` — manages active dispatch suggestion state. Methods: `findBest(incidentId)`, `accept()`, `decline()`, `declineAndReassign()`. Also listens for `dispatch_suggestion` WebSocket messages (server-pushed suggestions).
 - `components/types.ts` — `DispatchSuggestion` interface (suggestionId, vehicleId, incidentId, incident details, routePreview coords).
-- `components/CaseCard.tsx` — "Dispatch" button on open incidents (manual fallback; primary trigger is auto-dispatch).
-- `components/MapPanel.tsx` — when `dispatchSuggestion` prop is set: renders an `<InfoWindow>` on the recommended ambulance marker (incident type/priority/location + Accept/Decline buttons) and a dashed orange `<Polyline>` for the preview route. Active dispatch routes render as solid blue polylines (existing behavior).
-- `components/Dashboard.tsx` — wires `useDispatchSuggestion` hook. Passes `findBest` as `onNewIncident` callback to `useIncidents` for auto-dispatch, and passes suggestion/accept/decline to MapPanel.
+- `components/CaseCard.tsx` — "Dispatch" button on open incidents (manual fallback). Shows dispatch lifecycle status (finding, suggested, dispatched, en route, arrived) and assigned vehicle name via `DispatchInfo` prop.
+- `components/MapPanel.tsx` — when `dispatchSuggestion` prop is set: renders an `<InfoWindow>` on the recommended ambulance marker (vehicle name, incident type/priority/location + Accept/"Suggest Another" buttons) and a dashed orange `<Polyline>` for the preview route. Dispatched ambulances have a pulsing blue ring, suggested ambulances have a pulsing orange ring. Active dispatch routes render as solid blue polylines (existing behavior).
+- `components/Dashboard.tsx` — wires `useDispatchSuggestion` hook. Server-side auto-dispatch handles new incidents, so no client-side `onNewIncident` callback is needed. Builds a `dispatchInfoMap` from routes/incidents/suggestion state and passes it to CasesPanel. Passes `declineAndReassign` (not `decline`) to MapPanel so the dispatcher can cycle through alternative vehicles.
+- `hooks/useVehicleUpdates.ts` — exposes `incidentVehicleMap` (incident_id -> vehicle_id) alongside vehicles and routes, used by Dashboard to build dispatch info.
 
 **Key types** in `shared/types.py`: `VehicleDispatchEvent` (vehicle_id, incident_id, incident_lat, incident_lon, route, timestamp), `VehicleArrivalEvent` (vehicle_id, incident_id, timestamp).
 
@@ -138,6 +140,11 @@ curl -X POST http://localhost:8000/assignments/{suggestion_id}/accept
 
 # Decline assignment (clears suggestion, no dispatch)
 curl -X POST http://localhost:8000/assignments/{suggestion_id}/decline
+
+# Decline and reassign (suggests next best vehicle, excluding declined one)
+curl -X POST http://localhost:8000/assignments/{suggestion_id}/decline-and-reassign \
+  -H "Content-Type: application/json" \
+  -d '{"incident_id":"<uuid>","declined_vehicle_id":"ambulance-1"}'
 
 # Get active dispatch routes (survives frontend refresh)
 curl http://localhost:8000/active-routes

@@ -157,6 +157,7 @@ vehicle_assignments = {}
 
 class FindBestRequest(BaseModel):
     incident_id: str
+    exclude_vehicles: list[str] = []
 
 
 def get_open_incidents():
@@ -288,8 +289,9 @@ async def find_best_assignment(request: FindBestRequest):
     # Get all open incidents from DB for full optimization context
     all_open_incidents = get_open_incidents()
 
-    # Get all currently available vehicles
-    available_vehicles = [v for v in MOCK_VEHICLES if v.status == "available"]
+    # Get all currently available vehicles, excluding any the dispatcher has declined
+    exclude_set = set(request.exclude_vehicles)
+    available_vehicles = [v for v in MOCK_VEHICLES if v.status == "available" and v.id not in exclude_set]
     if not available_vehicles:
         raise HTTPException(status_code=503, detail="No available vehicles to assign")
 

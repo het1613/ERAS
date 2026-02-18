@@ -275,3 +275,44 @@
     font-weight: bold;
     margin-top: -5px;
 }
+
+/* Pulsing ring for dispatched ambulances */
+.map-marker-dispatched::before {
+    content: "";
+    position: absolute;
+    top: 50%;
+    left: 50%;
+    width: 60px;
+    height: 60px;
+    transform: translate(-50%, -55%);
+    border-radius: 50%;
+    border: 3px solid #2563eb;
+    animation: dispatch-pulse 1.5s ease-out infinite;
+    pointer-events: none;
+}
+
+/* Highlight ring for the suggested ambulance */
+.map-marker-suggested::after {
+    content: "";
+    position: absolute;
+    top: 50%;
+    left: 50%;
+    width: 65px;
+    height: 65px;
+    transform: translate(-50%, -55%);
+    border-radius: 50%;
+    border: 3px solid #e29a00;
+    animation: suggest-pulse 1s ease-out infinite;
+    pointer-events: none;
+}
+
+@keyframes dispatch-pulse {
+    0% { transform: translate(-50%, -55%) scale(0.8); opacity: 1; }
+    100% { transform: translate(-50%, -55%) scale(1.6); opacity: 0; }
+}
+
+@keyframes suggest-pulse {
+    0% { transform: translate(-50%, -55%) scale(0.9); opacity: 1; }
+    50% { transform: translate(-50%, -55%) scale(1.2); opacity: 0.5; }
+    100% { transform: translate(-50%, -55%) scale(0.9); opacity: 1; }
+}

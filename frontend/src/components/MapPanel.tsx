@@ -102,6 +102,9 @@ export default function MapPanel({
 					const statusClass = unit.status
 						.toLowerCase()
 						.replace("on-scene", "onscene");
+					const isDispatched = unit.status === "Dispatched";
+					const isSuggested = dispatchSuggestion &&
+						unit.id.toLowerCase().replace(/\s+/g, "-") === dispatchSuggestion.vehicleId;
 
 					return (
 						<OverlayView
@@ -110,7 +113,7 @@ export default function MapPanel({
 							mapPaneName={OverlayView.OVERLAY_MOUSE_TARGET}
 						>
 							<div
-								className={`map-marker-container map-status-${statusClass}`}
+								className={`map-marker-container map-status-${statusClass}${isDispatched ? " map-marker-dispatched" : ""}${isSuggested ? " map-marker-suggested" : ""}`}
 							>
 								<AmbulanceMapIcon className="ambulance-svg" />
 								<div className="marker-label">{unit.id}</div>
@@ -127,13 +130,30 @@ export default function MapPanel({
 					const pos = parseCoords(suggestedUnit.coords);
 					const inc = dispatchSuggestion.incident;
 					const priorityColor = PRIORITY_COLORS[inc.priority as CasePriority] ?? "#888";
+					const vehicleLabel = dispatchSuggestion.vehicleId
+						.replace(/[-_]/g, " ")
+						.replace(/\b\w/g, (c: string) => c.toUpperCase());
 					return (
 						<InfoWindow
 							position={pos}
 							options={{ pixelOffset: new google.maps.Size(0, -30) }}
 							onCloseClick={onDeclineSuggestion}
 						>
-							<div style={{ fontFamily: "sans-serif", minWidth: 200, padding: "4px 0" }}>
+							<div style={{ fontFamily: "sans-serif", minWidth: 220, padding: "4px 0" }}>
+								<div style={{
+									fontSize: 11, fontWeight: 600, color: "#2563eb",
+									textTransform: "uppercase", letterSpacing: "0.5px",
+									marginBottom: 6,
+								}}>
+									Dispatch Suggestion
+								</div>
+								<div style={{
+									fontSize: 13, fontWeight: 700, color: "#222",
+									marginBottom: 8, padding: "4px 8px",
+									background: "#eff6ff", borderRadius: 6,
+								}}>
+									{vehicleLabel}
+								</div>
 								<div style={{ display: "flex", alignItems: "center", gap: 6, marginBottom: 6 }}>
 									<span style={{
 										width: 10, height: 10, borderRadius: "50%",
@@ -145,16 +165,16 @@ export default function MapPanel({
 									</span>
 								</div>
 								<div style={{ fontSize: 12, fontWeight: 600, color: priorityColor, marginBottom: 4 }}>
-									{inc.priority}
+									{inc.priority} Priority
 								</div>
-								<div style={{ fontSize: 12, color: "#555", marginBottom: 8 }}>
+								<div style={{ fontSize: 12, color: "#555", marginBottom: 10 }}>
 									{inc.location}
 								</div>
 								<div style={{ display: "flex", gap: 8 }}>
 									<button
 										onClick={onAcceptSuggestion}
 										style={{
-											flex: 1, padding: "6px 0", border: "none", borderRadius: 6,
+											flex: 1, padding: "8px 0", border: "none", borderRadius: 6,
 											background: "#2e994e", color: "#fff", fontWeight: 600,
 											fontSize: 13, cursor: "pointer",
 										}}
@@ -164,12 +184,12 @@ export default function MapPanel({
 									<button
 										onClick={onDeclineSuggestion}
 										style={{
-											flex: 1, padding: "6px 0", border: "none", borderRadius: 6,
-											background: "#d6455d", color: "#fff", fontWeight: 600,
+											flex: 1, padding: "8px 0", border: "none", borderRadius: 6,
+											background: "#64748b", color: "#fff", fontWeight: 600,
 											fontSize: 13, cursor: "pointer",
 										}}
 									>
-										Decline
+										Suggest Another
 									</button>
 								</div>
 							</div>

@@ -1,9 +1,10 @@
-import { useState, useCallback } from "react";
+import { useState, useMemo } from "react";
 import TranscriptPanel from "./TranscriptPanel";
 import MapPanel from "./MapPanel";
 import "./Dashboard.css";
 import AmbulancePanel, { UnitInfo, VehicleData } from "./AmbulancePanel";
 import CasesPanel from "./CasePanel";
+import { DispatchInfo } from "./CaseCard";
 import { useVehicleUpdates } from "../hooks/useVehicleUpdates";
 import { useIncidents } from "../hooks/useIncidents";
 import { useDispatchSuggestion } from "../hooks/useDispatchSuggestion";
@@ -30,43 +31,78 @@ function vehicleToUnit(v: VehicleData): UnitInfo {
 }
 
 const Dashboard = () => {
-	// 1. New state to track the active panel, defaulting to 'Ambulances'
 	const [activeView, setActiveView] = useState<ActiveView>("Ambulances");
 	const [focusedUnit, setFocusedUnit] = useState<UnitInfo | null>(null);
 	const [selectedSessionId, setSelectedSessionId] = useState<string | null>(
 		null
 	);
 
-	const { vehicles, routes } = useVehicleUpdates();
+	const { vehicles, routes, incidentVehicleMap } = useVehicleUpdates();
 	const units = vehicles.map(vehicleToUnit);
-	const { suggestion, loading: dispatchLoading, findBest, accept, decline } = useDispatchSuggestion();
+	const {
+		suggestion,
+		loading: dispatchLoading,
+		findBest,
+		accept,
+		declineAndReassign,
+	} = useDispatchSuggestion();
 
-	const handleNewIncident = useCallback(
-		(incident: { id: string; status: string }) => {
-			if (incident.status === "open") {
-				findBest(incident.id);
-			}
-		},
-		[findBest]
-	);
-
-	const { incidents } = useIncidents({ onNewIncident: handleNewIncident });
+	// Server-side auto-dispatch handles new incidents now — no client-side callback needed
+	const { incidents } = useIncidents();
 	const activeIncidents = incidents.filter((i) => i.status !== "resolved");
 
-	// 2. Function to pass down to the navigation buttons
+	// Build dispatch info map for CaseCards
+	const dispatchInfoMap = useMemo(() => {
+		const map: Record<string, DispatchInfo> = {};
+
+		// Mark incidents that have an active dispatch suggestion
+		if (suggestion) {
+			map[suggestion.incidentId] = {
+				phase: "suggested",
+				vehicleId: suggestion.vehicleId,
+			};
+		}
+
+		// Mark incidents that have a dispatched vehicle (active route)
+		for (const [vehicleId] of routes) {
+			// Find which incident this vehicle is dispatched to
+			for (const [incidentId, vId] of Object.entries(incidentVehicleMap)) {
+				if (vId === vehicleId && !map[incidentId]) {
+					map[incidentId] = {
+						phase: "en_route",
+						vehicleId,
+					};
+				}
+			}
+		}
+
+		// Mark in_progress incidents without routes as "dispatched"
+		for (const inc of incidents) {
+			if (inc.status === "in_progress" && !map[inc.id]) {
+				const vehicleId = incidentVehicleMap[inc.id];
+				map[inc.id] = {
+					phase: "dispatched",
+					vehicleId: vehicleId || undefined,
+				};
+			}
+			if (inc.status === "resolved" && !map[inc.id]) {
+				map[inc.id] = { phase: "arrived" };
+			}
+		}
+
+		return map;
+	}, [suggestion, routes, incidentVehicleMap, incidents]);
+
 	const handleViewChange = (view: ActiveView) => {
 		setActiveView(view);
 	};
 
-	// 3. Conditional Rendering logic
 	const renderLeftPanel = () => {
 		if (activeView === "Ambulances") {
 			return (
 				<AmbulancePanel
-					// 1. Pass the missing props here
 					activeView={activeView}
 					handleViewChange={handleViewChange}
-					// 2. Keep your existing new props
 					units={units}
 					onUnitClick={(unit) => setFocusedUnit(unit)}
 				/>
@@ -78,6 +114,7 @@ const Dashboard = () => {
 					handleViewChange={handleViewChange}
 					onDispatch={findBest}
 					dispatchLoading={dispatchLoading}
+					dispatchInfoMap={dispatchInfoMap}
 				/>
 			);
 		} else {
@@ -111,7 +148,7 @@ const Dashboard = () => {
 					incidents={activeIncidents}
 					dispatchSuggestion={suggestion}
 					onAcceptSuggestion={accept}
-					onDeclineSuggestion={decline}
+					onDeclineSuggestion={declineAndReassign}
 				/>
 			</div>
 		</div>

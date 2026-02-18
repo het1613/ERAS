@@ -4,6 +4,7 @@ import { VehicleData } from "../components/AmbulancePanel";
 interface UseVehicleUpdatesResult {
 	vehicles: VehicleData[];
 	routes: Array<[string, google.maps.LatLngLiteral[]]>;
+	incidentVehicleMap: Record<string, string>;
 	connected: boolean;
 	loading: boolean;
 }
@@ -15,8 +16,8 @@ export function useVehicleUpdates(): UseVehicleUpdatesResult {
 	const [routeMap, setRouteMap] = useState<
 		Map<string, google.maps.LatLngLiteral[]>
 	>(new Map());
-	// Track which incident corresponds to which vehicle for cleanup
-	const incidentToVehicleRef = useRef<Map<string, string>>(new Map());
+	// Track incident -> vehicle mapping as state so it can be consumed by Dashboard
+	const [incidentVehicleMap, setIncidentVehicleMap] = useState<Record<string, string>>({});
 	const [connected, setConnected] = useState(false);
 	const [loading, setLoading] = useState(true);
 	const wsRef = useRef<WebSocket | null>(null);
@@ -44,16 +45,17 @@ export function useVehicleUpdates(): UseVehicleUpdatesResult {
 
 				if (routesRes.ok) {
 					const data = await routesRes.json();
-					// data.routes is { vehicle_id: { incident_id, route: [{lat,lng},...] } }
 					const routes: Record<string, { incident_id: string; route: google.maps.LatLngLiteral[] }> = data.routes ?? {};
 					const rMap = new Map<string, google.maps.LatLngLiteral[]>();
+					const ivMap: Record<string, string> = {};
 					for (const [vehicleId, entry] of Object.entries(routes)) {
 						if (entry.route && entry.route.length > 0) {
 							rMap.set(vehicleId, entry.route);
-							incidentToVehicleRef.current.set(entry.incident_id, vehicleId);
+							ivMap[entry.incident_id] = vehicleId;
 						}
 					}
 					setRouteMap(rMap);
+					setIncidentVehicleMap(ivMap);
 				}
 			} catch (err) {
 				console.error("Failed to fetch initial state:", err);
@@ -95,22 +97,24 @@ export function useVehicleUpdates(): UseVehicleUpdatesResult {
 						next.set(vehicle_id, route);
 						return next;
 					});
-					incidentToVehicleRef.current.set(incident_id, vehicle_id);
+					setIncidentVehicleMap((prev) => ({ ...prev, [incident_id]: vehicle_id }));
 				}
 			} else if (msg.type === "incident_updated") {
 				const incident = msg.data;
 				if (incident.status === "resolved") {
-					const vehicleId = incidentToVehicleRef.current.get(
-						incident.id
-					);
-					if (vehicleId) {
-						setRouteMap((prev) => {
-							const next = new Map(prev);
-							next.delete(vehicleId);
-							return next;
-						});
-						incidentToVehicleRef.current.delete(incident.id);
-					}
+					setIncidentVehicleMap((prev) => {
+						const vehicleId = prev[incident.id];
+						if (vehicleId) {
+							setRouteMap((rPrev) => {
+								const next = new Map(rPrev);
+								next.delete(vehicleId);
+								return next;
+							});
+							const { [incident.id]: _, ...rest } = prev;
+							return rest;
+						}
+						return prev;
+					});
 				}
 			}
 		} catch (err) {
@@ -137,6 +141,7 @@ export function useVehicleUpdates(): UseVehicleUpdatesResult {
 	return {
 		vehicles: Array.from(vehicleMap.values()),
 		routes: Array.from(routeMap.entries()),
+		incidentVehicleMap,
 		connected,
 		loading,
 	};

@@ -58,6 +58,9 @@ active_routes: Dict[str, Dict] = {}
 # Updated on dispatch ("dispatched") and arrival ("available")
 vehicle_statuses: Dict[str, str] = {}
 
+# Per-incident dispatch state: incident_id -> { declined_vehicles: [str], suggestion_id: str | None }
+incident_dispatch_state: Dict[str, Dict] = {}
+
 # WebSocket connection manager
 class ConnectionManager:
     def __init__(self):
@@ -372,6 +375,46 @@ async def get_session_assignment(session_id: str):
 
 class FindBestRequest(BaseModel):
     incident_id: str
+    exclude_vehicles: list[str] = []
+
+
+async def _find_best_and_broadcast(incident_id: str, exclude_vehicles: list[str] = []):
+    """Call geospatial-dispatch find-best and broadcast the result via WebSocket.
+
+    Returns the suggestion data dict on success, or None on failure.
+    """
+    try:
+        async with httpx.AsyncClient() as client:
+            response = await client.post(
+                f"{GEOSPATIAL_DISPATCH_URL}/assignments/find-best",
+                json={"incident_id": incident_id, "exclude_vehicles": exclude_vehicles},
+                timeout=15.0,
+            )
+            response.raise_for_status()
+            data = response.json()
+
+        # Track the active suggestion for this incident
+        suggestion_id = data.get("suggestion_id")
+        if incident_id not in incident_dispatch_state:
+            incident_dispatch_state[incident_id] = {"declined_vehicles": [], "suggestion_id": None}
+        incident_dispatch_state[incident_id]["suggestion_id"] = suggestion_id
+
+        # Broadcast dispatch suggestion to all connected Dashboard clients
+        await manager.broadcast({
+            "type": "dispatch_suggestion",
+            "data": data,
+        })
+
+        logger.info(f"Broadcast dispatch_suggestion for incident {incident_id}: vehicle {data.get('suggested_vehicle_id')}")
+        return data
+
+    except httpx.HTTPStatusError as e:
+        detail = e.response.json().get("detail", "Error") if e.response else "Error"
+        logger.error(f"find-best failed for incident {incident_id}: {detail}")
+        return None
+    except Exception as e:
+        logger.error(f"Error calling find-best for incident {incident_id}: {e}")
+        return None
 
 
 @app.post("/assignments/find-best")
@@ -429,6 +472,44 @@ async def proxy_decline(suggestion_id: str):
         raise HTTPException(status_code=503, detail="Geospatial service unavailable")
 
 
+class DeclineAndReassignRequest(BaseModel):
+    incident_id: str
+    declined_vehicle_id: str
+
+
+@app.post("/assignments/{suggestion_id}/decline-and-reassign")
+async def decline_and_reassign(suggestion_id: str, req: DeclineAndReassignRequest):
+    """Decline the current suggestion, add the vehicle to the exclude list, and find the next best."""
+    # Decline the current suggestion on geospatial-dispatch
+    try:
+        async with httpx.AsyncClient() as client:
+            response = await client.post(
+                f"{GEOSPATIAL_DISPATCH_URL}/assignments/{suggestion_id}/decline",
+                timeout=5.0,
+            )
+            response.raise_for_status()
+    except Exception as e:
+        logger.warning(f"Error declining suggestion {suggestion_id}: {e}")
+
+    # Track declined vehicles for this incident
+    if req.incident_id not in incident_dispatch_state:
+        incident_dispatch_state[req.incident_id] = {"declined_vehicles": [], "suggestion_id": None}
+    state = incident_dispatch_state[req.incident_id]
+    if req.declined_vehicle_id not in state["declined_vehicles"]:
+        state["declined_vehicles"].append(req.declined_vehicle_id)
+
+    # Find the next best vehicle, excluding all previously declined ones
+    dispatch_data = await _find_best_and_broadcast(
+        req.incident_id,
+        exclude_vehicles=state["declined_vehicles"],
+    )
+
+    if not dispatch_data:
+        return {"status": "no_vehicles_available", "suggestion_id": suggestion_id}
+
+    return {"status": "reassigned", "dispatch_suggestion": dispatch_data}
+
+
 @app.get("/vehicles")
 async def get_vehicles():
     """
@@ -468,8 +549,8 @@ async def list_acr_codes():
 @app.post("/suggestions/{suggestion_id}/accept")
 async def accept_suggestion(suggestion_id: str, req: AcceptSuggestionRequest):
     """
-    Accept a suggestion: apply optional overrides, create an incident, and update status.
-    The incident_created broadcast will trigger auto-dispatch in the frontend.
+    Accept a suggestion: apply optional overrides, create an incident, update status,
+    and automatically trigger dispatch optimization (server-side auto-dispatch).
     """
     suggestion = suggestions_by_id.get(suggestion_id)
     if not suggestion:
@@ -521,7 +602,15 @@ async def accept_suggestion(suggestion_id: str, req: AcceptSuggestionRequest):
     })
 
     logger.info(f"Accepted suggestion {suggestion_id}, created incident {incident_id}")
-    return {"incident": incident_dict, "suggestion_status": "accepted"}
+
+    # Server-side auto-dispatch: find the best ambulance and push suggestion to dispatcher
+    dispatch_data = await _find_best_and_broadcast(incident_id)
+
+    return {
+        "incident": incident_dict,
+        "suggestion_status": "accepted",
+        "dispatch_suggestion": dispatch_data,
+    }
 
 
 @app.post("/suggestions/{suggestion_id}/dismiss")

@@ -318,3 +318,57 @@
     opacity: 0.6;
     cursor: not-allowed;
 }
+
+/* Dispatch phase indicator on CaseCard */
+.dispatch-phase-indicator {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    margin-top: 10px;
+    padding: 8px 12px;
+    border-radius: 10px;
+    font-size: 13px;
+    font-weight: 600;
+}
+
+.dispatch-phase-label {
+    flex-shrink: 0;
+}
+
+.dispatch-vehicle-label {
+    font-weight: 500;
+    opacity: 0.85;
+    font-size: 12px;
+}
+
+.dispatch-phase-finding {
+    background: #f3f4f6;
+    color: #6b7280;
+    animation: pulse-bg 1.5s infinite;
+}
+
+.dispatch-phase-suggested {
+    background: #fff7ed;
+    color: #c2410c;
+}
+
+.dispatch-phase-dispatched {
+    background: #eff6ff;
+    color: #1d4ed8;
+}
+
+.dispatch-phase-enroute {
+    background: #eff6ff;
+    color: #2563eb;
+    animation: pulse-bg 2s infinite;
+}
+
+.dispatch-phase-arrived {
+    background: #ecfdf5;
+    color: #059669;
+}
+
+@keyframes pulse-bg {
+    0%, 100% { opacity: 1; }
+    50% { opacity: 0.6; }
+}
