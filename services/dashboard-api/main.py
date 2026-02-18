@@ -538,6 +538,55 @@ async def get_active_routes():
     return {"routes": active_routes}
 
 
+# --- Geocoding endpoint ---
+
+NOMINATIM_URL = "https://nominatim.openstreetmap.org/search"
+NOMINATIM_HEADERS = {"User-Agent": "ERAS-EmergencyDispatch/1.0"}
+NOMINATIM_VIEWBOX = "-80.7,43.3,-80.3,43.6"
+
+
+class GeocodeRequest(BaseModel):
+    address: str
+
+
+@app.post("/geocode")
+async def geocode_address(req: GeocodeRequest):
+    """Geocode an address string using Nominatim (OpenStreetMap), biased toward Waterloo Region."""
+    if not req.address.strip():
+        raise HTTPException(status_code=400, detail="Address is required")
+
+    try:
+        async with httpx.AsyncClient() as client:
+            response = await client.get(
+                NOMINATIM_URL,
+                params={
+                    "q": req.address,
+                    "format": "json",
+                    "limit": 1,
+                    "viewbox": NOMINATIM_VIEWBOX,
+                    "bounded": 1,
+                    "countrycodes": "ca",
+                },
+                headers=NOMINATIM_HEADERS,
+                timeout=10.0,
+            )
+            response.raise_for_status()
+            results = response.json()
+
+        if results:
+            lat = float(results[0]["lat"])
+            lon = float(results[0]["lon"])
+            logger.info(f"Geocoded '{req.address}' -> ({lat}, {lon})")
+            return {"lat": lat, "lon": lon, "found": True}
+
+        logger.info(f"No geocoding results for '{req.address}'")
+        return {"lat": None, "lon": None, "found": False}
+
+    except Exception as e:
+        logger.warning(f"Geocoding failed for '{req.address}': {e}")
+        raise HTTPException(status_code=502, detail="Geocoding service unavailable")
+
+
 # --- ACR Code & Suggestion Accept/Dismiss endpoints ---
 
 @app.get("/acr-codes")

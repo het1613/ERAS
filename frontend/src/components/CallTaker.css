@@ -400,6 +400,23 @@
     line-height: 1;
 }
 
+/* ── Geocoding Badge ───────────────────────────────────────────────── */
+
+.geocoding-badge {
+    display: inline-block;
+    font-size: 0.65rem;
+    font-weight: 700;
+    color: #2563eb;
+    margin-left: 0.35rem;
+    vertical-align: middle;
+    animation: spin 1s linear infinite;
+}
+
+@keyframes spin {
+    from { transform: rotate(0deg); }
+    to { transform: rotate(360deg); }
+}
+
 /* ── Empty State ───────────────────────────────────────────────────── */
 
 .empty-state {

@@ -62,6 +62,7 @@ const CallTaker: React.FC = () => {
     }>>({});
 
     const [acceptingId, setAcceptingId] = useState<string | null>(null);
+    const [geocodingId, setGeocodingId] = useState<string | null>(null);
 
     const transcriptsEndRef = useRef<HTMLDivElement>(null);
     const apiUrl = import.meta.env.VITE_API_URL || 'http://localhost:8000';
@@ -255,6 +256,34 @@ const CallTaker: React.FC = () => {
             }
         }
     };
+
+    const geocodeLocation = useCallback(async (suggestionId: string, address: string) => {
+        if (!address.trim()) return;
+        setGeocodingId(suggestionId);
+        try {
+            const res = await fetch(`${apiUrl}/geocode`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ address }),
+            });
+            if (!res.ok) return;
+            const data = await res.json();
+            if (data.found) {
+                setOverrides(prev => ({
+                    ...prev,
+                    [suggestionId]: {
+                        ...prev[suggestionId],
+                        lat: String(data.lat),
+                        lon: String(data.lon),
+                    }
+                }));
+            }
+        } catch (error) {
+            console.error('Geocoding error:', error);
+        } finally {
+            setGeocodingId(null);
+        }
+    }, [apiUrl]);
 
     const handleAccept = async (suggestion: Suggestion) => {
         const override = overrides[suggestion.id];
@@ -482,12 +511,16 @@ const CallTaker: React.FC = () => {
                                                     {s.extracted_location && (
                                                         <span className="ai-extracted-badge" title="Auto-extracted from transcript by AI">AI</span>
                                                     )}
+                                                    {geocodingId === s.id && (
+                                                        <span className="geocoding-badge" title="Updating coordinates...">⟳</span>
+                                                    )}
                                                 </label>
                                                 <input
                                                     type="text"
                                                     placeholder="e.g. 234 Columbia St"
                                                     value={override.location}
                                                     onChange={(e) => updateOverride(s.id, 'location', e.target.value)}
+                                                    onBlur={(e) => geocodeLocation(s.id, e.target.value)}
                                                 />
                                             </div>
 
