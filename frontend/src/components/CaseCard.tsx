@@ -7,6 +7,7 @@ export type DispatchPhase =
 	| "suggested"     // Dispatch suggestion shown on map, waiting for dispatcher
 	| "dispatched"    // Dispatcher accepted, ambulance dispatched
 	| "en_route"      // Ambulance following route
+	| "on_scene"      // Ambulance on scene
 	| "arrived"       // Ambulance arrived / incident resolved
 	| null;           // No active dispatch
 
@@ -44,6 +45,7 @@ const DISPATCH_PHASE_CONFIG: Record<string, { label: string; className: string }
 	suggested:  { label: "Ambulance Suggested",  className: "dispatch-phase-suggested" },
 	dispatched: { label: "Dispatched",           className: "dispatch-phase-dispatched" },
 	en_route:   { label: "En Route",             className: "dispatch-phase-enroute" },
+	on_scene:   { label: "On Scene",             className: "dispatch-phase-onscene" },
 	arrived:    { label: "Arrived",              className: "dispatch-phase-arrived" },
 };
 

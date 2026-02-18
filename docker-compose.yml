@@ -160,6 +160,19 @@ services:
     networks:
       - eras-network
 
+  vehicle-simulator:
+    build:
+      context: .
+      dockerfile: scripts/Dockerfile
+    container_name: eras-vehicle-simulator
+    environment:
+      KAFKA_BOOTSTRAP_SERVERS: kafka:29092
+    depends_on:
+      kafka:
+        condition: service_healthy
+    networks:
+      - eras-network
+
 networks:
   eras-network:
     driver: bridge

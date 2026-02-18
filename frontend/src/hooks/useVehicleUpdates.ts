@@ -1,5 +1,6 @@
-import { useState, useEffect, useRef, useCallback } from "react";
+import { useState, useEffect, useCallback, useRef } from "react";
 import { VehicleData } from "../components/AmbulancePanel";
+import { useWebSocket } from "../contexts/WebSocketContext";
 
 interface UseVehicleUpdatesResult {
 	vehicles: VehicleData[];
@@ -9,6 +10,27 @@ interface UseVehicleUpdatesResult {
 	loading: boolean;
 }
 
+function trimRouteToVehicle(
+	route: google.maps.LatLngLiteral[],
+	vehicleLat: number,
+	vehicleLng: number
+): google.maps.LatLngLiteral[] {
+	if (route.length < 2) return route;
+	let closestIdx = 0;
+	let closestDist = Infinity;
+	for (let i = 0; i < route.length; i++) {
+		const d =
+			(route[i].lat - vehicleLat) ** 2 + (route[i].lng - vehicleLng) ** 2;
+		if (d < closestDist) {
+			closestDist = d;
+			closestIdx = i;
+		}
+	}
+	const remaining = route.slice(closestIdx + 1);
+	if (remaining.length === 0) return [];
+	return [{ lat: vehicleLat, lng: vehicleLng }, ...remaining];
+}
+
 export function useVehicleUpdates(): UseVehicleUpdatesResult {
 	const [vehicleMap, setVehicleMap] = useState<Map<string, VehicleData>>(
 		new Map()
@@ -16,15 +38,17 @@ export function useVehicleUpdates(): UseVehicleUpdatesResult {
 	const [routeMap, setRouteMap] = useState<
 		Map<string, google.maps.LatLngLiteral[]>
 	>(new Map());
-	// Track incident -> vehicle mapping as state so it can be consumed by Dashboard
-	const [incidentVehicleMap, setIncidentVehicleMap] = useState<Record<string, string>>({});
-	const [connected, setConnected] = useState(false);
+	const fullRouteMap = useRef<Map<string, google.maps.LatLngLiteral[]>>(
+		new Map()
+	);
+	const [incidentVehicleMap, setIncidentVehicleMap] = useState<
+		Record<string, string>
+	>({});
 	const [loading, setLoading] = useState(true);
-	const wsRef = useRef<WebSocket | null>(null);
 
+	const { connected, subscribe } = useWebSocket();
 	const apiUrl = import.meta.env.VITE_API_URL || "http://localhost:8000";
 
-	// Fetch initial vehicle list + active routes via REST
 	useEffect(() => {
 		async function fetchInitialState() {
 			try {
@@ -45,12 +69,16 @@ export function useVehicleUpdates(): UseVehicleUpdatesResult {
 
 				if (routesRes.ok) {
 					const data = await routesRes.json();
-					const routes: Record<string, { incident_id: string; route: google.maps.LatLngLiteral[] }> = data.routes ?? {};
+					const routes: Record<
+						string,
+						{ incident_id: string; route: google.maps.LatLngLiteral[] }
+					> = data.routes ?? {};
 					const rMap = new Map<string, google.maps.LatLngLiteral[]>();
 					const ivMap: Record<string, string> = {};
 					for (const [vehicleId, entry] of Object.entries(routes)) {
 						if (entry.route && entry.route.length > 0) {
 							rMap.set(vehicleId, entry.route);
+							fullRouteMap.current.set(vehicleId, [...entry.route]);
 							ivMap[entry.incident_id] = vehicleId;
 						}
 					}
@@ -66,18 +94,20 @@ export function useVehicleUpdates(): UseVehicleUpdatesResult {
 		fetchInitialState();
 	}, [apiUrl]);
 
-	// WebSocket for live updates
-	const handleMessage = useCallback((event: MessageEvent) => {
-		try {
-			const msg = JSON.parse(event.data);
-
+	const handleMessage = useCallback(
+		(msg: { type: string; data: any }) => {
 			if (msg.type === "vehicle_location") {
 				const { vehicle_id, lat, lon, status } = msg.data;
 				setVehicleMap((prev) => {
 					const next = new Map(prev);
 					const existing = next.get(vehicle_id);
 					if (existing) {
-						next.set(vehicle_id, { ...existing, lat, lon, status: status ?? existing.status });
+						next.set(vehicle_id, {
+							...existing,
+							lat,
+							lon,
+							status: status ?? existing.status,
+						});
 					} else {
 						next.set(vehicle_id, {
 							id: vehicle_id,
@@ -89,15 +119,35 @@ export function useVehicleUpdates(): UseVehicleUpdatesResult {
 					}
 					return next;
 				});
+
+				// Trim route to show only remaining path ahead of vehicle
+				setRouteMap((prev) => {
+					const currentRoute = prev.get(vehicle_id);
+					if (!currentRoute || currentRoute.length === 0) return prev;
+					const trimmed = trimRouteToVehicle(currentRoute, lat, lon);
+					if (trimmed.length === 0) {
+						const next = new Map(prev);
+						next.delete(vehicle_id);
+						fullRouteMap.current.delete(vehicle_id);
+						return next;
+					}
+					const next = new Map(prev);
+					next.set(vehicle_id, trimmed);
+					return next;
+				});
 			} else if (msg.type === "vehicle_dispatched") {
 				const { vehicle_id, incident_id, route } = msg.data;
 				if (route && route.length > 0) {
+					fullRouteMap.current.set(vehicle_id, [...route]);
 					setRouteMap((prev) => {
 						const next = new Map(prev);
 						next.set(vehicle_id, route);
 						return next;
 					});
-					setIncidentVehicleMap((prev) => ({ ...prev, [incident_id]: vehicle_id }));
+					setIncidentVehicleMap((prev) => ({
+						...prev,
+						[incident_id]: vehicle_id,
+					}));
 				}
 			} else if (msg.type === "incident_updated") {
 				const incident = msg.data;
@@ -110,6 +160,7 @@ export function useVehicleUpdates(): UseVehicleUpdatesResult {
 								next.delete(vehicleId);
 								return next;
 							});
+							fullRouteMap.current.delete(vehicleId);
 							const { [incident.id]: _, ...rest } = prev;
 							return rest;
 						}
@@ -117,26 +168,13 @@ export function useVehicleUpdates(): UseVehicleUpdatesResult {
 					});
 				}
 			}
-		} catch (err) {
-			console.error("Error parsing vehicle WS message:", err);
-		}
-	}, []);
+		},
+		[]
+	);
 
 	useEffect(() => {
-		const wsUrl = apiUrl.replace(/^http/, "ws") + "/ws";
-		const ws = new WebSocket(wsUrl);
-
-		ws.onopen = () => setConnected(true);
-		ws.onclose = () => setConnected(false);
-		ws.onerror = (err) => console.error("Vehicle WS error:", err);
-		ws.onmessage = handleMessage;
-
-		wsRef.current = ws;
-
-		return () => {
-			ws.close();
-		};
-	}, [apiUrl, handleMessage]);
+		return subscribe(handleMessage);
+	}, [subscribe, handleMessage]);
 
 	return {
 		vehicles: Array.from(vehicleMap.values()),

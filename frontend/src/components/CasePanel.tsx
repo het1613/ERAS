@@ -1,14 +1,12 @@
 // CasesPanel.tsx
 import "./CasePanel.css";
 import CaseCard, { DispatchInfo } from "./CaseCard";
-import { CasePriority } from "./types";
-import { useIncidents } from "../hooks/useIncidents";
+import { CaseInfo, CasePriority } from "./types";
 
 type PriorityCounts = {
 	[key in CasePriority]?: number;
 };
 
-// Map priorities to a display color for buttons
 const priorityColorMap: Record<CasePriority, string> = {
 	Purple: "purple-text",
 	Red: "red-text",
@@ -22,6 +20,8 @@ export type ActiveView = "Ambulances" | "Cases" | "Transcripts";
 interface PanelProps {
 	activeView: ActiveView;
 	handleViewChange: (view: ActiveView) => void;
+	incidents: CaseInfo[];
+	loading?: boolean;
 	onDispatch?: (incidentId: string) => void;
 	dispatchLoading?: boolean;
 	dispatchInfoMap?: Record<string, DispatchInfo>;
@@ -30,11 +30,12 @@ interface PanelProps {
 export default function CasesPanel({
 	activeView,
 	handleViewChange,
+	incidents,
+	loading = false,
 	onDispatch,
 	dispatchLoading,
 	dispatchInfoMap = {},
 }: PanelProps): JSX.Element {
-	const { incidents, loading } = useIncidents();
 
 	const priorityCounts: PriorityCounts = incidents.reduce((acc, c) => {
 		acc[c.priority] = (acc[c.priority] || 0) + 1;

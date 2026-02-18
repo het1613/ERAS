@@ -16,6 +16,8 @@ function vehicleToUnit(v: VehicleData): UnitInfo {
 	const statusMap: Record<string, UnitInfo["status"]> = {
 		available: "Available",
 		dispatched: "Dispatched",
+		on_scene: "On-scene",
+		returning: "Returning",
 		offline: "Returning",
 	};
 	const label = v.id
@@ -51,6 +53,15 @@ const Dashboard = () => {
 	const { incidents } = useIncidents();
 	const activeIncidents = incidents.filter((i) => i.status !== "resolved");
 
+	// Build a lookup of vehicle statuses by normalized id for dispatch phase inference
+	const vehicleStatusById = useMemo(() => {
+		const m: Record<string, string> = {};
+		for (const v of vehicles) {
+			m[v.id] = v.status;
+		}
+		return m;
+	}, [vehicles]);
+
 	// Build dispatch info map for CaseCards
 	const dispatchInfoMap = useMemo(() => {
 		const map: Record<string, DispatchInfo> = {};
@@ -65,7 +76,6 @@ const Dashboard = () => {
 
 		// Mark incidents that have a dispatched vehicle (active route)
 		for (const [vehicleId] of routes) {
-			// Find which incident this vehicle is dispatched to
 			for (const [incidentId, vId] of Object.entries(incidentVehicleMap)) {
 				if (vId === vehicleId && !map[incidentId]) {
 					map[incidentId] = {
@@ -73,6 +83,15 @@ const Dashboard = () => {
 						vehicleId,
 					};
 				}
+			}
+		}
+
+		// Use vehicle status to determine on_scene phase
+		for (const [incidentId, vehicleId] of Object.entries(incidentVehicleMap)) {
+			if (map[incidentId]) continue;
+			const vStatus = vehicleStatusById[vehicleId];
+			if (vStatus === "on_scene") {
+				map[incidentId] = { phase: "on_scene", vehicleId };
 			}
 		}
 
@@ -91,7 +110,7 @@ const Dashboard = () => {
 		}
 
 		return map;
-	}, [suggestion, routes, incidentVehicleMap, incidents]);
+	}, [suggestion, routes, incidentVehicleMap, incidents, vehicleStatusById]);
 
 	const handleViewChange = (view: ActiveView) => {
 		setActiveView(view);
@@ -112,6 +131,8 @@ const Dashboard = () => {
 				<CasesPanel
 					activeView={activeView}
 					handleViewChange={handleViewChange}
+					incidents={incidents}
+					loading={false}
 					onDispatch={findBest}
 					dispatchLoading={dispatchLoading}
 					dispatchInfoMap={dispatchInfoMap}

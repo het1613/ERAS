@@ -1,5 +1,6 @@
-import { useState, useCallback, useEffect, useRef } from "react";
+import { useState, useCallback, useEffect } from "react";
 import { DispatchSuggestion } from "../components/types";
+import { useWebSocket } from "../contexts/WebSocketContext";
 
 interface UseDispatchSuggestionResult {
 	suggestion: DispatchSuggestion | null;
@@ -24,58 +25,50 @@ function parseSuggestionData(data: any): DispatchSuggestion {
 }
 
 export function useDispatchSuggestion(): UseDispatchSuggestionResult {
-	const [suggestion, setSuggestion] = useState<DispatchSuggestion | null>(null);
+	const [suggestion, setSuggestion] = useState<DispatchSuggestion | null>(
+		null
+	);
 	const [loading, setLoading] = useState(false);
-	const wsRef = useRef<WebSocket | null>(null);
 
+	const { subscribe } = useWebSocket();
 	const apiUrl = import.meta.env.VITE_API_URL || "http://localhost:8000";
 
-	// Listen for server-pushed dispatch_suggestion messages via WebSocket
 	useEffect(() => {
-		const wsUrl = apiUrl.replace(/^http/, "ws") + "/ws";
-		const ws = new WebSocket(wsUrl);
+		return subscribe((msg) => {
+			if (msg.type === "dispatch_suggestion" && msg.data) {
+				const parsed = parseSuggestionData(msg.data);
+				setSuggestion(parsed);
+				setLoading(false);
+			}
+		});
+	}, [subscribe]);
 
-		ws.onmessage = (event) => {
+	const findBest = useCallback(
+		async (incidentId: string) => {
+			setLoading(true);
 			try {
-				const msg = JSON.parse(event.data);
-				if (msg.type === "dispatch_suggestion" && msg.data) {
-					const parsed = parseSuggestionData(msg.data);
-					setSuggestion(parsed);
-					setLoading(false);
+				const res = await fetch(`${apiUrl}/assignments/find-best`, {
+					method: "POST",
+					headers: { "Content-Type": "application/json" },
+					body: JSON.stringify({ incident_id: incidentId }),
+				});
+				if (!res.ok) {
+					const err = await res.json().catch(() => ({}));
+					throw new Error(err.detail || `HTTP ${res.status}`);
 				}
+				const data = await res.json();
+				setSuggestion(parseSuggestionData(data));
 			} catch (err) {
-				console.error("Error parsing dispatch_suggestion WS message:", err);
+				console.error("Failed to find best assignment:", err);
+				alert(
+					err instanceof Error ? err.message : "Failed to find assignment"
+				);
+			} finally {
+				setLoading(false);
 			}
-		};
-
-		wsRef.current = ws;
-
-		return () => {
-			ws.close();
-		};
-	}, [apiUrl]);
-
-	const findBest = useCallback(async (incidentId: string) => {
-		setLoading(true);
-		try {
-			const res = await fetch(`${apiUrl}/assignments/find-best`, {
-				method: "POST",
-				headers: { "Content-Type": "application/json" },
-				body: JSON.stringify({ incident_id: incidentId }),
-			});
-			if (!res.ok) {
-				const err = await res.json().catch(() => ({}));
-				throw new Error(err.detail || `HTTP ${res.status}`);
-			}
-			const data = await res.json();
-			setSuggestion(parseSuggestionData(data));
-		} catch (err) {
-			console.error("Failed to find best assignment:", err);
-			alert(err instanceof Error ? err.message : "Failed to find assignment");
-		} finally {
-			setLoading(false);
-		}
-	}, [apiUrl]);
+		},
+		[apiUrl]
+	);
 
 	const accept = useCallback(async () => {
 		if (!suggestion) return;
@@ -132,8 +125,6 @@ export function useDispatchSuggestion(): UseDispatchSuggestionResult {
 				setSuggestion(null);
 				setLoading(false);
 			}
-			// The new suggestion will arrive via WebSocket (dispatch_suggestion)
-			// so we don't need to set it here — the WS handler will do it
 		} catch (err) {
 			console.error("Failed to decline and reassign:", err);
 			alert(err instanceof Error ? err.message : "Failed to reassign");
@@ -142,5 +133,12 @@ export function useDispatchSuggestion(): UseDispatchSuggestionResult {
 		}
 	}, [apiUrl, suggestion]);
 
-	return { suggestion, loading, findBest, accept, decline, declineAndReassign };
+	return {
+		suggestion,
+		loading,
+		findBest,
+		accept,
+		decline,
+		declineAndReassign,
+	};
 }

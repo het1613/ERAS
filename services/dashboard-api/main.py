@@ -619,6 +619,12 @@ async def accept_suggestion(suggestion_id: str, req: AcceptSuggestionRequest):
     conn = get_connection()
     try:
         with conn.cursor() as cur:
+            # Ensure session exists in DB (sessions are in-memory but incidents FK references sessions table)
+            if suggestion.session_id:
+                cur.execute(
+                    "INSERT INTO sessions (id, created_at, status) VALUES (%s, %s, 'active') ON CONFLICT (id) DO NOTHING",
+                    (suggestion.session_id, now)
+                )
             cur.execute(
                 """INSERT INTO incidents (id, session_id, lat, lon, location, type, priority, weight, status, reported_at, updated_at)
                    VALUES (%s, %s, %s, %s, %s, %s, %s, %s, 'open', %s, %s)""",
@@ -791,17 +797,22 @@ def process_suggestion_message(message_value: dict):
 def process_vehicle_location_message(message_value: dict):
     """Process a vehicle location message from Kafka."""
     try:
+        # Extract simulator-provided status before building VehicleLocation (which doesn't have a status field)
+        status_from_sim = message_value.pop("status", None)
+
         if isinstance(message_value.get('timestamp'), str):
             message_value['timestamp'] = datetime.fromisoformat(message_value['timestamp'])
 
         location = VehicleLocation(**message_value)
 
-        logger.info(f"Processed vehicle location for: {location.vehicle_id}")
+        # Use simulator status as source of truth when available; fall back to internal tracking
+        if status_from_sim:
+            vehicle_statuses[location.vehicle_id] = status_from_sim
+        status = vehicle_statuses.get(location.vehicle_id, "available")
 
         location_dict = location.model_dump()
         location_dict['timestamp'] = location_dict['timestamp'].isoformat()
-        # Enrich with tracked status so frontend always has current status
-        location_dict['status'] = vehicle_statuses.get(location.vehicle_id, "available")
+        location_dict['status'] = status
 
         global event_loop
         if event_loop and event_loop.is_running():
@@ -864,10 +875,10 @@ def process_vehicle_arrival_message(message_value: dict):
         if not incident_id:
             return
 
-        # Clear the active route and reset status for this vehicle
+        # Clear the active route; status is managed by simulator via location messages
         if vehicle_id:
             active_routes.pop(vehicle_id, None)
-            vehicle_statuses[vehicle_id] = "available"
+            vehicle_statuses[vehicle_id] = "returning"
 
         logger.info(f"Vehicle {vehicle_id} arrived at incident {incident_id}, resolving...")
 

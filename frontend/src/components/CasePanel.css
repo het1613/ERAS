@@ -363,6 +363,11 @@
     animation: pulse-bg 2s infinite;
 }
 
+.dispatch-phase-onscene {
+    background: #fefce8;
+    color: #a16207;
+}
+
 .dispatch-phase-arrived {
     background: #ecfdf5;
     color: #059669;
