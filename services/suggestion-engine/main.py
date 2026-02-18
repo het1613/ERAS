@@ -65,6 +65,13 @@ transcript_history: dict[str, list[str]] = defaultdict(list)
 # Maps session_id -> set of incident_code strings
 suggested_codes_by_session: dict[str, set[str]] = defaultdict(set)
 
+# Track all published suggestions per session so location updates can re-publish them
+# Maps session_id -> list of Suggestion objects
+published_suggestions_by_session: dict[str, list] = defaultdict(list)
+
+# Track the last extracted location per session to avoid redundant updates
+last_location_by_session: dict[str, str] = {}
+
 # Nominatim geocoding config
 NOMINATIM_URL = "https://nominatim.openstreetmap.org/search"
 NOMINATIM_HEADERS = {"User-Agent": "ERAS-EmergencyDispatch/1.0"}
@@ -319,13 +326,12 @@ def _publish_suggestion(suggestion: Suggestion, producer) -> None:
 def _location_update_worker(
     session_id: str,
     full_text: str,
-    suggestion_ids: list[str],
-    suggestions: list[Suggestion],
     producer,
 ) -> None:
     """
     Background thread: extract location via LLM, geocode it, and re-publish
-    the suggestions with location data so the frontend can update the cards.
+    all pending suggestions for this session with updated location data.
+    Skips if the extracted location is the same as the last one.
     """
     try:
         llm_result = extract_location(full_text)
@@ -334,6 +340,13 @@ def _location_update_worker(
             return
 
         extracted_location = llm_result["location"]
+
+        # Skip if location hasn't changed since last extraction
+        if last_location_by_session.get(session_id) == extracted_location:
+            logger.info(f"Location unchanged for session {session_id}, skipping update")
+            return
+        last_location_by_session[session_id] = extracted_location
+
         extracted_lat = None
         extracted_lon = None
 
@@ -346,6 +359,8 @@ def _location_update_worker(
             f"'{extracted_location}' -> ({extracted_lat}, {extracted_lon})"
         )
 
+        # Update ALL pending suggestions for this session
+        suggestions = published_suggestions_by_session.get(session_id, [])
         for suggestion in suggestions:
             suggestion.extracted_location = extracted_location
             suggestion.extracted_lat = extracted_lat
@@ -364,6 +379,8 @@ def process_transcript(transcript_data: dict, producer) -> None:
     """
     Process a single transcript: publish keyword-matched suggestions immediately,
     then kick off LLM location extraction in a background thread.
+    Location extraction runs on every transcript regardless of new suggestions,
+    so updated addresses are always picked up.
     """
     try:
         if isinstance(transcript_data.get('timestamp'), str):
@@ -379,32 +396,30 @@ def process_transcript(transcript_data: dict, producer) -> None:
         # Publish keyword-matched suggestions immediately (no location)
         suggestions = generate_suggestions(transcript)
 
-        if not suggestions:
-            logger.info(f"No suggestions generated for session: {transcript.session_id}")
-            return
+        if suggestions:
+            for suggestion in suggestions:
+                _publish_suggestion(suggestion, producer)
+                logger.info(
+                    f"Published suggestion '{suggestion.value}' "
+                    f"(priority={suggestion.priority}, confidence={suggestion.confidence}) "
+                    f"for session: {transcript.session_id}"
+                )
+            # Track for future location updates
+            published_suggestions_by_session[transcript.session_id].extend(suggestions)
 
-        for suggestion in suggestions:
-            _publish_suggestion(suggestion, producer)
-            logger.info(
-                f"Published suggestion '{suggestion.value}' "
-                f"(priority={suggestion.priority}, confidence={suggestion.confidence}) "
-                f"for session: {transcript.session_id}"
+        # Always run LLM location extraction in background — updates all
+        # existing suggestions for this session if a new location is found
+        if published_suggestions_by_session.get(transcript.session_id):
+            thread = threading.Thread(
+                target=_location_update_worker,
+                args=(
+                    transcript.session_id,
+                    full_text,
+                    producer,
+                ),
+                daemon=True,
             )
-
-        # Run LLM location extraction in background thread — will re-publish
-        # the same suggestions with location data when ready
-        thread = threading.Thread(
-            target=_location_update_worker,
-            args=(
-                transcript.session_id,
-                full_text,
-                [s.id for s in suggestions],
-                suggestions,
-                producer,
-            ),
-            daemon=True,
-        )
-        thread.start()
+            thread.start()
 
     except Exception as e:
         logger.error(f"Error processing transcript: {e}", exc_info=True)

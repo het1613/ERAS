@@ -158,25 +158,18 @@ const CallTaker: React.FC = () => {
                     setSuggestions(prev =>
                         prev.map(s => s.id === updated.id ? updated : s)
                     );
-                    // Auto-fill location fields if the user hasn't manually edited them
+                    // Update location fields from AI extraction
                     if (updated.extracted_location) {
-                        const loc = updated.extracted_location;
-                        const lat = updated.extracted_lat;
-                        const lon = updated.extracted_lon;
                         setOverrides(prev => {
                             const existing = prev[updated.id];
                             if (!existing) return prev;
-                            const locationUntouched = !existing.location || existing.location === '';
-                            const latUntouched = existing.lat === '43.4643';
-                            const lonUntouched = existing.lon === '-80.5205';
-                            if (!locationUntouched && !latUntouched) return prev;
                             return {
                                 ...prev,
                                 [updated.id]: {
                                     ...existing,
-                                    location: locationUntouched ? loc : existing.location,
-                                    lat: latUntouched && lat != null ? String(lat) : existing.lat,
-                                    lon: lonUntouched && lon != null ? String(lon) : existing.lon,
+                                    location: updated.extracted_location ?? existing.location,
+                                    lat: updated.extracted_lat != null ? String(updated.extracted_lat) : existing.lat,
+                                    lon: updated.extracted_lon != null ? String(updated.extracted_lon) : existing.lon,
                                 },
                             };
                         });
