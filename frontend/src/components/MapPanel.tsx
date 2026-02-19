@@ -59,7 +59,8 @@ export default function MapPanel({ units, focusedUnit }: MapPanelProps) {
 							>
 								{/* Use the SVG component directly */}
 								<AmbulanceMapIcon className="ambulance-svg" />
-								<div className="marker-label">{unit.id}</div>
+								{/* This is the label underneath the icon */}
+								{/* <div className="marker-label">{unit.id}</div> */}
 							</div>
 						</OverlayView>
 					);
