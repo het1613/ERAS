@@ -268,4 +268,112 @@
 .status-Red { color: #d6455d; }
 .status-Orange { color: #e29a00; }
 .status-Yellow { color: #d4a700; }
-.status-Green { color: #2e994e }
+.status-Green { color: #2e994e; }
+
+/* Status badge (open / in_progress / resolved) */
+.case-status-badge {
+    display: inline-block;
+    font-size: 12px;
+    font-weight: 600;
+    padding: 2px 10px;
+    border-radius: 8px;
+    margin-bottom: 10px;
+}
+
+.status-badge-open {
+    background: #e8f5e9;
+    color: #2e7d32;
+}
+
+.status-badge-in_progress {
+    background: #fff3e0;
+    color: #e65100;
+}
+
+.status-badge-resolved {
+    background: #e0e0e0;
+    color: #616161;
+}
+
+/* Dispatch button on CaseCard */
+.dispatch-btn {
+    margin-top: 12px;
+    width: 100%;
+    padding: 8px 0;
+    border: none;
+    border-radius: 10px;
+    background: #2563EB;
+    color: #fff;
+    font-size: 14px;
+    font-weight: 600;
+    cursor: pointer;
+    transition: background 0.15s;
+}
+
+.dispatch-btn:hover:not(:disabled) {
+    background: #1d4ed8;
+}
+
+.dispatch-btn:disabled {
+    opacity: 0.6;
+    cursor: not-allowed;
+}
+
+/* Dispatch phase indicator on CaseCard */
+.dispatch-phase-indicator {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    margin-top: 10px;
+    padding: 8px 12px;
+    border-radius: 10px;
+    font-size: 13px;
+    font-weight: 600;
+}
+
+.dispatch-phase-label {
+    flex-shrink: 0;
+}
+
+.dispatch-vehicle-label {
+    font-weight: 500;
+    opacity: 0.85;
+    font-size: 12px;
+}
+
+.dispatch-phase-finding {
+    background: #f3f4f6;
+    color: #6b7280;
+    animation: pulse-bg 1.5s infinite;
+}
+
+.dispatch-phase-suggested {
+    background: #fff7ed;
+    color: #c2410c;
+}
+
+.dispatch-phase-dispatched {
+    background: #eff6ff;
+    color: #1d4ed8;
+}
+
+.dispatch-phase-enroute {
+    background: #eff6ff;
+    color: #2563eb;
+    animation: pulse-bg 2s infinite;
+}
+
+.dispatch-phase-onscene {
+    background: #fefce8;
+    color: #a16207;
+}
+
+.dispatch-phase-arrived {
+    background: #ecfdf5;
+    color: #059669;
+}
+
+@keyframes pulse-bg {
+    0%, 100% { opacity: 1; }
+    50% { opacity: 0.6; }
+}

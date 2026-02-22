@@ -3,7 +3,7 @@ Data models for ERAS system.
 """
 
 from pydantic import BaseModel
-from typing import Optional
+from typing import Optional, List
 from datetime import datetime
 
 
@@ -24,11 +24,22 @@ class Transcript(BaseModel):
 
 class Suggestion(BaseModel):
     """Represents an AI-generated suggestion for a dispatch action."""
+    id: str = ""  # Unique identifier for frontend reference
     session_id: str
     suggestion_type: str  # e.g., "incident_code", "alert", "vehicle"
-    value: str  # e.g., "10-70: Fire Alarm"
+    value: str  # Human-readable summary, e.g., "Code 51 - Cardiac: Ischemic"
     timestamp: datetime
-    status: str = "pending"  # "pending", "accepted", "declined", "modified"
+    status: str = "pending"  # "pending", "accepted", "dismissed"
+    # Structured Ontario ACR Problem Code fields
+    incident_code: Optional[str] = None  # ACR code, e.g., "51"
+    incident_code_description: Optional[str] = None  # e.g., "Ischemic"
+    incident_code_category: Optional[str] = None  # e.g., "Cardiac"
+    priority: Optional[str] = None  # MPDS priority: Purple/Red/Orange/Yellow/Green
+    confidence: Optional[float] = None  # 0.0 - 1.0 match confidence
+    # LLM-extracted location fields
+    extracted_location: Optional[str] = None  # Street address / description from LLM
+    extracted_lat: Optional[float] = None  # Geocoded latitude (via Nominatim)
+    extracted_lon: Optional[float] = None  # Geocoded longitude (via Nominatim)
 
 
 class Vehicle(BaseModel):
@@ -40,10 +51,64 @@ class Vehicle(BaseModel):
     vehicle_type: str  # "ambulance", "fire_truck", "police"
 
 
+class VehicleLocation(BaseModel):
+    """Represents a real-time vehicle location update from Kafka."""
+    vehicle_id: str
+    lat: float
+    lon: float
+    timestamp: datetime
+
+
 class AssignmentSuggestion(BaseModel):
     """Represents a suggested vehicle assignment for an incident."""
-    session_id: str
+    suggestion_id: str
     suggested_vehicle_id: str
     route: str 
     timestamp: datetime
+
+
+class VehicleDispatchEvent(BaseModel):
+    """Represents a dispatch event sent via Kafka when an assignment is accepted."""
+    vehicle_id: str
+    incident_id: str
+    incident_lat: float
+    incident_lon: float
+    route: List[List[float]]  # List of [lat, lon] pairs
+    timestamp: datetime
+
+
+class VehicleArrivalEvent(BaseModel):
+    """Published by the simulator when a dispatched vehicle arrives at its incident."""
+    vehicle_id: str
+    incident_id: str
+    timestamp: datetime
+
+
+PRIORITY_WEIGHT_MAP = {
+    "Purple": 16,
+    "Red": 8,
+    "Orange": 4,
+    "Yellow": 2,
+    "Green": 1,
+}
+
+
+class Incident(BaseModel):
+    """Represents a single incident, used as input for targeted dispatch."""
+    id: Optional[str] = None
+    session_id: Optional[str] = None
+    lat: float
+    lon: float
+    location: Optional[str] = None
+    type: Optional[str] = None
+    priority: str = "Yellow"
+    weight: int = 0
+    status: str = "open"
+    reported_at: Optional[datetime] = None
+    updated_at: Optional[datetime] = None
+
+    def __init__(self, **data):
+        super().__init__(**data)
+        if self.weight == 0:
+            self.weight = PRIORITY_WEIGHT_MAP.get(self.priority, 2)
 

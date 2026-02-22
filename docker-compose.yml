@@ -84,6 +84,22 @@ services:
     networks:
       - eras-network
 
+  ollama:
+    image: ollama/ollama:latest
+    container_name: eras-ollama
+    ports:
+      - "11434:11434"
+    volumes:
+      - ollama_data:/root/.ollama
+    networks:
+      - eras-network
+    healthcheck:
+      test: ["CMD", "ollama", "list"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 15s
+
   suggestion-engine:
     build:
       context: .
@@ -92,11 +108,14 @@ services:
     environment:
       KAFKA_BOOTSTRAP_SERVERS: kafka:29092
       KAFKA_CONSUMER_GROUP_ID: suggestion-engine-service
+      OLLAMA_BASE_URL: http://ollama:11434
     depends_on:
       kafka:
         condition: service_healthy
       audio-processing:
         condition: service_started
+      ollama:
+        condition: service_healthy
     networks:
       - eras-network
 
@@ -109,6 +128,8 @@ services:
       - "8002:8002"
     environment:
       KAFKA_BOOTSTRAP_SERVERS: kafka:29092
+      KAFKA_CONSUMER_GROUP_ID: geospatial-dispatch-service
+      DATABASE_URL: postgresql://${POSTGRES_USER:-eras_user}:${POSTGRES_PASSWORD:-eras_pass}@postgres:5432/${POSTGRES_DB:-eras_db}
     depends_on:
       kafka:
         condition: service_healthy
@@ -139,10 +160,24 @@ services:
     networks:
       - eras-network
 
+  vehicle-simulator:
+    build:
+      context: .
+      dockerfile: scripts/Dockerfile
+    container_name: eras-vehicle-simulator
+    environment:
+      KAFKA_BOOTSTRAP_SERVERS: kafka:29092
+    depends_on:
+      kafka:
+        condition: service_healthy
+    networks:
+      - eras-network
+
 networks:
   eras-network:
     driver: bridge
 
 volumes:
   postgres_data:
+  ollama_data:
 

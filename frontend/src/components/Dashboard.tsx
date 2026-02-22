@@ -1,144 +1,148 @@
-import { useState } from "react";
+import { useState, useMemo } from "react";
+import TranscriptPanel from "./TranscriptPanel";
 import MapPanel from "./MapPanel";
 import "./Dashboard.css";
-import AmbulancePanel, { UnitInfo } from "./AmbulancePanel";
+import AmbulancePanel, { UnitInfo, VehicleData } from "./AmbulancePanel";
 import CasesPanel from "./CasePanel";
-import { CaseInfo } from "./types";
+import { DispatchInfo } from "./CaseCard";
+import { useVehicleUpdates } from "../hooks/useVehicleUpdates";
+import { useIncidents } from "../hooks/useIncidents";
+import { useDispatchSuggestion } from "../hooks/useDispatchSuggestion";
 
 // Define the two possible views for type safety
-type ActiveView = "Ambulances" | "Cases";
+type ActiveView = "Ambulances" | "Cases" | "Transcripts";
 
-const mockUnits: UnitInfo[] = [
-	{
-		id: "Ambulance 2001",
-		status: "Available",
-		crew: "J. Smith, S. Williams",
-		coords: "43.4643, -80.5205", // Location A (Start)
-	},
-	{
-		id: "Ambulance 2002",
-		status: "Available",
-		crew: "A. Doe, B. Johnson",
-		coords: "43.4557, -80.4058", // Location B (Airport area)
-	},
-	{
-		id: "Ambulance 2003",
-		status: "Returning",
-		crew: "C. Lee, D. Brown",
-		coords: "43.4700, -80.4500", // Location C (North)
-	},
-	{
-		id: "Ambulance 2004",
-		status: "Dispatched",
-		crew: "E. Davis, F. Miller",
-		coords: "43.4400, -80.4800", // Location D (South)
-	},
-];
+function vehicleToUnit(v: VehicleData): UnitInfo {
+	const statusMap: Record<string, UnitInfo["status"]> = {
+		available: "Available",
+		dispatched: "Dispatched",
+		on_scene: "On-scene",
+		returning: "Returning",
+		offline: "Returning",
+	};
+	const label = v.id
+		.replace(/[-_]/g, " ")
+		.replace(/\b\w/g, (c) => c.toUpperCase());
 
-const mockCases: CaseInfo[] = [
-	{
-		id: "inc-001",
-		priority: "Red",
-		type: "Chest Pain",
-		location: "200 University Ave W, Waterloo",
-		reportedTime: "17:35",
-		lat: 43.4643,
-		lng: -80.5204,
-	},
-	{
-		id: "inc-002",
-		priority: "Purple",
-		type: "Motor Vehicle Collision",
-		location: "85 King St S, Waterloo",
-		reportedTime: "17:30",
-		lat: 43.4516,
-		lng: -80.4925,
-	},
-	{
-		id: "inc-003",
-		priority: "Orange",
-		type: "Breathing Problems",
-		location: "435 Erb St W, Waterloo",
-		reportedTime: "17:25",
-		lat: 43.4340,
-		lng: -80.5224,
-	},
-	{
-		id: "inc-004",
-		priority: "Yellow",
-		type: "Falls",
-		location: "330 Phillip St, Waterloo",
-		reportedTime: "17:20",
-		lat: 43.4761,
-		lng: -80.5283,
-	},
-	{
-		id: "inc-005",
-		priority: "Red",
-		type: "Unconscious/Fainting",
-		location: "295 King St E, Kitchener",
-		reportedTime: "17:15",
-		lat: 43.4506,
-		lng: -80.4830,
-	},
-	{
-		id: "inc-006",
-		priority: "Purple",
-		type: "Stroke/CVA",
-		location: "750 Ottawa St S, Kitchener",
-		reportedTime: "17:10",
-		lat: 43.4280,
-		lng: -80.4680,
-	},
-	{
-		id: "inc-007",
-		priority: "Orange",
-		type: "Allergic Reaction",
-		location: "1187 Fischer-Hallman Rd, Cambridge",
-		reportedTime: "17:05",
-		lat: 43.3945,
-		lng: -80.3982,
-	},
-	{
-		id: "inc-008",
-		priority: "Yellow",
-		type: "Seizures",
-		location: "100 Columbia St W, Waterloo",
-		reportedTime: "17:00",
-		lat: 43.4488,
-		lng: -80.5485,
-	},
-];
+	return {
+		id: label,
+		status: statusMap[v.status] ?? "Available",
+		crew: "",
+		coords: `${v.lat.toFixed(4)}, ${v.lon.toFixed(4)}`,
+	};
+}
 
 const Dashboard = () => {
-	// 1. New state to track the active panel, defaulting to 'Ambulances'
 	const [activeView, setActiveView] = useState<ActiveView>("Ambulances");
 	const [focusedUnit, setFocusedUnit] = useState<UnitInfo | null>(null);
 	const [selectedSessionId, setSelectedSessionId] = useState<string | null>(
 		null
 	);
 
-	// 2. Function to pass down to the navigation buttons
+	const { vehicles, routes, incidentVehicleMap } = useVehicleUpdates();
+	const units = vehicles.map(vehicleToUnit);
+	const {
+		suggestion,
+		loading: dispatchLoading,
+		findBest,
+		accept,
+		declineAndReassign,
+	} = useDispatchSuggestion();
+
+	// Server-side auto-dispatch handles new incidents now — no client-side callback needed
+	const { incidents } = useIncidents();
+	const activeIncidents = incidents.filter((i) => i.status !== "resolved");
+
+	// Build a lookup of vehicle statuses by normalized id for dispatch phase inference
+	const vehicleStatusById = useMemo(() => {
+		const m: Record<string, string> = {};
+		for (const v of vehicles) {
+			m[v.id] = v.status;
+		}
+		return m;
+	}, [vehicles]);
+
+	// Build dispatch info map for CaseCards
+	const dispatchInfoMap = useMemo(() => {
+		const map: Record<string, DispatchInfo> = {};
+
+		// Mark incidents that have an active dispatch suggestion
+		if (suggestion) {
+			map[suggestion.incidentId] = {
+				phase: "suggested",
+				vehicleId: suggestion.vehicleId,
+			};
+		}
+
+		// Mark incidents that have a dispatched vehicle (active route)
+		for (const [vehicleId] of routes) {
+			for (const [incidentId, vId] of Object.entries(incidentVehicleMap)) {
+				if (vId === vehicleId && !map[incidentId]) {
+					map[incidentId] = {
+						phase: "en_route",
+						vehicleId,
+					};
+				}
+			}
+		}
+
+		// Use vehicle status to determine on_scene phase
+		for (const [incidentId, vehicleId] of Object.entries(incidentVehicleMap)) {
+			if (map[incidentId]) continue;
+			const vStatus = vehicleStatusById[vehicleId];
+			if (vStatus === "on_scene") {
+				map[incidentId] = { phase: "on_scene", vehicleId };
+			}
+		}
+
+		// Mark in_progress incidents without routes as "dispatched"
+		for (const inc of incidents) {
+			if (inc.status === "in_progress" && !map[inc.id]) {
+				const vehicleId = incidentVehicleMap[inc.id];
+				map[inc.id] = {
+					phase: "dispatched",
+					vehicleId: vehicleId || undefined,
+				};
+			}
+			if (inc.status === "resolved" && !map[inc.id]) {
+				map[inc.id] = { phase: "arrived" };
+			}
+		}
+
+		return map;
+	}, [suggestion, routes, incidentVehicleMap, incidents, vehicleStatusById]);
+
 	const handleViewChange = (view: ActiveView) => {
 		setActiveView(view);
 	};
 
-	// 3. Conditional Rendering logic
 	const renderLeftPanel = () => {
 		if (activeView === "Ambulances") {
 			return (
 				<AmbulancePanel
-					// 1. Pass the missing props here
 					activeView={activeView}
 					handleViewChange={handleViewChange}
-					// 2. Keep your existing new props
-					units={mockUnits}
+					units={units}
 					onUnitClick={(unit) => setFocusedUnit(unit)}
+				/>
+			);
+		} else if (activeView === "Cases") {
+			return (
+				<CasesPanel
+					activeView={activeView}
+					handleViewChange={handleViewChange}
+					incidents={incidents}
+					loading={false}
+					onDispatch={findBest}
+					dispatchLoading={dispatchLoading}
+					dispatchInfoMap={dispatchInfoMap}
 				/>
 			);
 		} else {
 			return (
-				<CasesPanel
+				<TranscriptPanel
+					selectedSessionId={selectedSessionId}
+					onSessionSelect={setSelectedSessionId}
 					activeView={activeView}
 					handleViewChange={handleViewChange}
 				/>
@@ -149,11 +153,18 @@ const Dashboard = () => {
 	return (
 		<div className="dashboard">
 			<div className="dashboard-left">
-				{/* Render the selected panel based on state */}
 				{renderLeftPanel()}
 			</div>
 			<div className="dashboard-right">
-				<MapPanel units={mockUnits} focusedUnit={focusedUnit} cases={mockCases} />
+				<MapPanel
+					units={units}
+					focusedUnit={focusedUnit}
+					routes={routes}
+					incidents={activeIncidents}
+					dispatchSuggestion={suggestion}
+					onAcceptSuggestion={accept}
+					onDeclineSuggestion={declineAndReassign}
+				/>
 			</div>
 		</div>
 	);

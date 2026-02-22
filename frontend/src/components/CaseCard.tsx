@@ -1,9 +1,22 @@
 // CaseCard.tsx
-import React from "react";
-import "./CasePanel.css"; // Keep the CSS import so styles work
-import { CaseInfo } from "./types"; // Import the shared type
+import "./CasePanel.css";
+import { CaseInfo } from "./types";
 
-// --- Helper for Colors (Moved here because only the card needs it) ---
+export type DispatchPhase =
+	| "finding"       // Server is searching for optimal ambulance
+	| "suggested"     // Dispatch suggestion shown on map, waiting for dispatcher
+	| "dispatched"    // Dispatcher accepted, ambulance dispatched
+	| "en_route"      // Ambulance following route
+	| "on_scene"      // Ambulance on scene
+	| "arrived"       // Ambulance arrived / incident resolved
+	| null;           // No active dispatch
+
+export interface DispatchInfo {
+	phase: DispatchPhase;
+	vehicleId?: string;
+}
+
+// --- Helper for Colors ---
 const getPriorityColor = (p: string) => {
 	switch (p) {
 		case "Purple":
@@ -21,13 +34,46 @@ const getPriorityColor = (p: string) => {
 	}
 };
 
+const statusLabel: Record<string, string> = {
+	open: "Open",
+	in_progress: "In Progress",
+	resolved: "Resolved",
+};
+
+const DISPATCH_PHASE_CONFIG: Record<string, { label: string; className: string }> = {
+	finding:    { label: "Finding Ambulance...", className: "dispatch-phase-finding" },
+	suggested:  { label: "Ambulance Suggested",  className: "dispatch-phase-suggested" },
+	dispatched: { label: "Dispatched",           className: "dispatch-phase-dispatched" },
+	en_route:   { label: "En Route",             className: "dispatch-phase-enroute" },
+	on_scene:   { label: "On Scene",             className: "dispatch-phase-onscene" },
+	arrived:    { label: "Arrived",              className: "dispatch-phase-arrived" },
+};
+
 // --- Props Interface ---
 interface CaseCardProps {
 	data: CaseInfo;
+	onDispatch?: (incidentId: string) => void;
+	dispatchLoading?: boolean;
+	dispatchInfo?: DispatchInfo;
+}
+
+function formatTime(isoString: string | undefined): string {
+	if (!isoString) return "";
+	const d = new Date(isoString);
+	return d.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
+}
+
+function formatVehicleLabel(vehicleId: string): string {
+	return vehicleId
+		.replace(/[-_]/g, " ")
+		.replace(/\b\w/g, (c) => c.toUpperCase());
 }
 
 // --- The Component ---
-export default function CaseCard({ data }: CaseCardProps) {
+export default function CaseCard({ data, onDispatch, dispatchLoading, dispatchInfo }: CaseCardProps) {
+	const phase = dispatchInfo?.phase;
+	const phaseConfig = phase ? DISPATCH_PHASE_CONFIG[phase] : null;
+
 	return (
 		<div className="case-card">
 			{/* 1. WARNING ICON */}
@@ -50,6 +96,11 @@ export default function CaseCard({ data }: CaseCardProps) {
 				{data.priority}
 			</div>
 
+			{/* Status badge */}
+			<div className={`case-status-badge status-badge-${data.status}`}>
+				{statusLabel[data.status] || data.status}
+			</div>
+
 			{/* 3. CASE DETAILS */}
 			<div className="case-details-content">
 				<div className="case-row">
@@ -58,9 +109,32 @@ export default function CaseCard({ data }: CaseCardProps) {
 				</div>
 				<div className="case-row">
 					<span className="emoji">🕒</span>
-					<span>Reported at {data.reportedTime}</span>
+					<span>Reported at {formatTime(data.reported_at)}</span>
 				</div>
 			</div>
+
+			{/* 4. DISPATCH STATUS */}
+			{phaseConfig && (
+				<div className={`dispatch-phase-indicator ${phaseConfig.className}`}>
+					<span className="dispatch-phase-label">{phaseConfig.label}</span>
+					{dispatchInfo?.vehicleId && (
+						<span className="dispatch-vehicle-label">
+							{formatVehicleLabel(dispatchInfo.vehicleId)}
+						</span>
+					)}
+				</div>
+			)}
+
+			{/* 5. DISPATCH BUTTON (only when open and no active dispatch) */}
+			{data.status === "open" && !phase && onDispatch && (
+				<button
+					className="dispatch-btn"
+					disabled={dispatchLoading}
+					onClick={() => onDispatch(data.id)}
+				>
+					{dispatchLoading ? "Finding..." : "Dispatch"}
+				</button>
+			)}
 		</div>
 	);
 }

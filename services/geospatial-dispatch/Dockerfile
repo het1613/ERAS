@@ -11,6 +11,8 @@ RUN pip install --no-cache-dir -r requirements.txt
 
 # Copy service code
 COPY services/geospatial-dispatch/main.py /app/main.py
+COPY services/geospatial-dispatch/optimization.py /app/optimization.py
+COPY services/geospatial-dispatch/vehicle_tracker.py /app/vehicle_tracker.py
 
 # Expose port
 EXPOSE 8002

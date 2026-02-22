@@ -127,9 +127,21 @@
   border-left: 4px solid #3b82f6;
 }
 
+.suggestion-item.suggestion-accepted {
+  border-left-color: #2e994e;
+  opacity: 0.7;
+}
+
+.suggestion-item.suggestion-dismissed {
+  border-left-color: #9ca3af;
+  opacity: 0.5;
+}
+
 .suggestion-header {
   display: flex;
-  justify-content: space-between;
+  align-items: center;
+  gap: 0.375rem;
+  flex-wrap: wrap;
   margin-bottom: 0.5rem;
   font-size: 0.75rem;
 }
@@ -140,17 +152,65 @@
   color: #6b7280;
 }
 
+.suggestion-code {
+  font-size: 0.7rem;
+  font-weight: 700;
+  color: #1e40af;
+  background-color: #dbeafe;
+  padding: 0.1rem 0.4rem;
+  border-radius: 4px;
+}
+
+.suggestion-priority {
+  font-size: 0.65rem;
+  font-weight: 700;
+  padding: 0.1rem 0.4rem;
+  border-radius: 4px;
+}
+
+.suggestion-priority.priority-purple {
+  color: #6b21a8;
+  background-color: #f3e8ff;
+}
+
+.suggestion-priority.priority-red {
+  color: #991b1b;
+  background-color: #fee2e2;
+}
+
+.suggestion-priority.priority-orange {
+  color: #9a3412;
+  background-color: #fff7ed;
+}
+
+.suggestion-priority.priority-yellow {
+  color: #854d0e;
+  background-color: #fefce8;
+}
+
+.suggestion-priority.priority-green {
+  color: #166534;
+  background-color: #dcfce7;
+}
+
 .suggestion-status {
   padding: 0.125rem 0.5rem;
   border-radius: 4px;
   font-size: 0.7rem;
   background-color: #fef3c7;
   color: #92400e;
+  margin-left: auto;
 }
 
 .suggestion-value {
   color: #111827;
   font-weight: 500;
+}
+
+.suggestion-confidence {
+  font-size: 0.7rem;
+  color: #059669;
+  margin-top: 0.25rem;
 }
 
 .empty-state {

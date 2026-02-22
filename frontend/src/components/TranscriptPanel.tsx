@@ -1,5 +1,7 @@
 import { useEffect, useState } from 'react'
 import './TranscriptPanel.css'
+// Import ActiveView from AmbulancePanel to keep types consistent
+import { ActiveView } from './AmbulancePanel';
 
 interface Transcript {
   session_id: string
@@ -8,19 +10,28 @@ interface Transcript {
 }
 
 interface Suggestion {
+  id: string
   session_id: string
   suggestion_type: string
   value: string
   status: string
   timestamp: string
+  incident_code: string | null
+  incident_code_description: string | null
+  incident_code_category: string | null
+  priority: string | null
+  confidence: number | null
 }
 
 interface TranscriptPanelProps {
   selectedSessionId: string | null
   onSessionSelect: (sessionId: string | null) => void
+  // NEW PROPS for functionality
+  activeView: ActiveView
+  handleViewChange: (view: ActiveView) => void
 }
 
-const TranscriptPanel = ({ selectedSessionId, onSessionSelect }: TranscriptPanelProps) => {
+const TranscriptPanel = ({ selectedSessionId, onSessionSelect, activeView, handleViewChange }: TranscriptPanelProps) => {
   const [transcripts, setTranscripts] = useState<Transcript[]>([])
   const [suggestions, setSuggestions] = useState<Suggestion[]>([])
   const [sessions, setSessions] = useState<string[]>([])
@@ -29,21 +40,21 @@ const TranscriptPanel = ({ selectedSessionId, onSessionSelect }: TranscriptPanel
   // Fetch all existing data on mount
   useEffect(() => {
     const apiUrl = import.meta.env.VITE_API_URL || 'http://localhost:8000'
-    
+
     // Fetch transcripts and suggestions for all sessions
     const fetchAllData = async () => {
       try {
         const sessionsResponse = await fetch(`${apiUrl}/sessions`)
         const sessionsData = await sessionsResponse.json()
         const sessionIds = sessionsData.sessions.map((s: any) => s.session_id)
-        
+
         // Update sessions list
         setSessions(sessionIds)
-        
+
         if (sessionIds.length === 0) {
           return
         }
-        
+
         // Fetch transcripts and suggestions for each session
         const transcriptsPromises = sessionIds.map((sessionId: string) =>
           fetch(`${apiUrl}/sessions/${sessionId}/transcript`)
@@ -54,7 +65,7 @@ const TranscriptPanel = ({ selectedSessionId, onSessionSelect }: TranscriptPanel
               return []
             })
         )
-        
+
         const suggestionsPromises = sessionIds.map((sessionId: string) =>
           fetch(`${apiUrl}/sessions/${sessionId}/suggestions`)
             .then(res => res.json())
@@ -64,10 +75,10 @@ const TranscriptPanel = ({ selectedSessionId, onSessionSelect }: TranscriptPanel
               return []
             })
         )
-        
+
         const allTranscripts = await Promise.all(transcriptsPromises)
         const allSuggestions = await Promise.all(suggestionsPromises)
-        
+
         // Flatten arrays and set state
         setTranscripts(allTranscripts.flat())
         setSuggestions(allSuggestions.flat())
@@ -75,7 +86,7 @@ const TranscriptPanel = ({ selectedSessionId, onSessionSelect }: TranscriptPanel
         console.error('Error fetching initial data:', error)
       }
     }
-    
+
     fetchAllData()
   }, []) // Run once on mount
 
@@ -93,18 +104,18 @@ const TranscriptPanel = ({ selectedSessionId, onSessionSelect }: TranscriptPanel
     ws.onmessage = (event) => {
       try {
         const message = JSON.parse(event.data)
-        
+
         if (message.type === 'transcript') {
           const transcript = message.data as Transcript
           setTranscripts(prev => {
             // Check if transcript already exists (avoid duplicates)
-            const exists = prev.some(t => 
-              t.session_id === transcript.session_id && 
-              t.text === transcript.text && 
+            const exists = prev.some(t =>
+              t.session_id === transcript.session_id &&
+              t.text === transcript.text &&
               t.timestamp === transcript.timestamp
             )
             if (exists) return prev
-            
+
             return [...prev, transcript]
           })
           // Update sessions list
@@ -117,16 +128,15 @@ const TranscriptPanel = ({ selectedSessionId, onSessionSelect }: TranscriptPanel
         } else if (message.type === 'suggestion') {
           const suggestion = message.data as Suggestion
           setSuggestions(prev => {
-            // Check if suggestion already exists (avoid duplicates)
-            const exists = prev.some(s => 
-              s.session_id === suggestion.session_id && 
-              s.suggestion_type === suggestion.suggestion_type && 
-              s.value === suggestion.value && 
-              s.timestamp === suggestion.timestamp
-            )
+            const exists = prev.some(s => s.id === suggestion.id)
             if (exists) return prev
             return [...prev, suggestion]
           })
+        } else if (message.type === 'suggestion_updated') {
+          const updated = message.data as Suggestion
+          setSuggestions(prev =>
+            prev.map(s => s.id === updated.id ? updated : s)
+          )
         }
       } catch (error) {
         console.error('Error parsing WebSocket message:', error)
@@ -157,14 +167,14 @@ const TranscriptPanel = ({ selectedSessionId, onSessionSelect }: TranscriptPanel
     : suggestions
 
   return (
-    <div className="transcript-panel">
+    <div className="dispatch-panel transcript-panel"> {/* Added dispatch-panel class for consistent styling if needed */}
       <div className="transcript-panel-header">
         <h2>Transcripts & Suggestions</h2>
         <div className={`connection-status ${connected ? 'connected' : 'disconnected'}`}>
           {connected ? '● Connected' : '○ Disconnected'}
         </div>
       </div>
-      
+
       <div className="transcript-panel-sessions">
         <div className="session-list">
           <button
@@ -212,17 +222,58 @@ const TranscriptPanel = ({ selectedSessionId, onSessionSelect }: TranscriptPanel
               <div className="empty-state">No suggestions yet</div>
             ) : (
               filteredSuggestions.map((suggestion, idx) => (
-                <div key={idx} className={`suggestion-item suggestion-${suggestion.status}`}>
+                <div key={suggestion.id || idx} className={`suggestion-item suggestion-${suggestion.status}`}>
                   <div className="suggestion-header">
-                    <span className="suggestion-type">{suggestion.suggestion_type}</span>
+                    {suggestion.incident_code_category && (
+                      <span className="suggestion-type">{suggestion.incident_code_category}</span>
+                    )}
+                    {suggestion.incident_code && (
+                      <span className="suggestion-code">Code {suggestion.incident_code}</span>
+                    )}
+                    {suggestion.priority && (
+                      <span className={`suggestion-priority priority-${suggestion.priority.toLowerCase()}`}>
+                        {suggestion.priority}
+                      </span>
+                    )}
                     <span className="suggestion-status">{suggestion.status}</span>
                   </div>
-                  <div className="suggestion-value">{suggestion.value}</div>
+                  <div className="suggestion-value">
+                    {suggestion.incident_code_description || suggestion.value}
+                  </div>
+                  {suggestion.confidence != null && (
+                    <div className="suggestion-confidence">
+                      Confidence: {Math.round(suggestion.confidence * 100)}%
+                    </div>
+                  )}
                 </div>
               ))
             )}
           </div>
         </div>
+      </div>
+      {/* Bottom Navigation */}
+      <div className="bottom-nav">
+        <button
+          className={`nav-item ${activeView === "Ambulances" ? "active" : ""
+            }`}
+          onClick={() => handleViewChange("Ambulances")}
+        >
+          <span className="emoji">🚑</span> Ambulances
+        </button>
+        <button
+          className={`nav-item ${activeView === "Cases" ? "active" : ""
+            }`}
+          onClick={() => handleViewChange("Cases")}
+        >
+          <span className="emoji">⚠️</span> Cases
+        </button>
+        <button
+          className={`nav-item ${activeView === "Transcripts" ? "active" : ""
+            }`}
+          onClick={() => handleViewChange("Transcripts")}
+        >
+          <span className="emoji">📝</span> Transcripts
+        </button>
       </div>
     </div>
   )

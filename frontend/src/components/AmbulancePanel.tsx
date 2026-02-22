@@ -1,4 +1,4 @@
-import React from "react";
+import { useMemo } from "react";
 import "./AmbulancePanel.css";
 import AmbulanceCard from "./AmbulanceCard";
 
@@ -11,36 +11,59 @@ export interface UnitInfo {
 	coords: string;
 }
 
-// Define the possible views (make sure this is consistent with Dashboard.tsx)
-export type ActiveView = "Ambulances" | "Cases";
+export interface VehicleData {
+	id: string;
+	lat: number;
+	lon: number;
+	status: string;
+	vehicle_type: string;
+}
 
-// Define the interface for the props the component expects
+export type ActiveView = "Ambulances" | "Cases" | "Transcripts";
+
 interface PanelProps {
 	activeView: ActiveView;
 	handleViewChange: (view: ActiveView) => void;
-	// NEW PROPS
 	units: UnitInfo[];
 	onUnitClick: (unit: UnitInfo) => void;
 }
 
+const STATUS_FILTER_ORDER: { key: UnitStatus; cssClass: string }[] = [
+	{ key: "Available", cssClass: "available" },
+	{ key: "Dispatched", cssClass: "dispatched" },
+	{ key: "On-scene", cssClass: "onscene" },
+	{ key: "Returning", cssClass: "returning" },
+];
+
 export default function AmbulancePanel({
 	activeView,
 	handleViewChange,
-	units, // Receive units
-	onUnitClick, // Receive click handler
+	units,
+	onUnitClick,
 }: PanelProps) {
+	const statusCounts = useMemo(() => {
+		const counts: Record<string, number> = {};
+		for (const u of units) {
+			counts[u.status] = (counts[u.status] || 0) + 1;
+		}
+		return counts;
+	}, [units]);
+
 	return (
 		<div className="dispatch-panel">
-			{/* Top Bar*/}
 			<div className="top-nav">
 				<h2 className="panel-title">Emergency Dispatch</h2>
 
-				{/* Status Filter Buttons */}
 				<div className="status-filters">
-					<button className="filter available">2 Available</button>
-					<button className="filter dispatched">1 Dispatched</button>
-					<button className="filter onscene">2 On-scene</button>
-					<button className="filter returning">1 Returning</button>
+					{STATUS_FILTER_ORDER.map(({ key, cssClass }) => {
+						const count = statusCounts[key] || 0;
+						if (count === 0) return null;
+						return (
+							<button key={key} className={`filter ${cssClass}`}>
+								{count} {key}
+							</button>
+						);
+					})}
 					<button className="filter all">All</button>
 				</div>
 			</div>
@@ -66,20 +89,25 @@ export default function AmbulancePanel({
 			{/* Bottom Navigation (Inside both CasePanel.tsx and AmbulancePanel.tsx) */}
 			<div className="bottom-nav">
 				<button
-					className={`nav-item ${
-						activeView === "Ambulances" ? "active" : ""
-					}`}
+					className={`nav-item ${activeView === "Ambulances" ? "active" : ""
+						}`}
 					onClick={() => handleViewChange("Ambulances")}
 				>
 					<span className="emoji">🚑</span> Ambulances
 				</button>
 				<button
-					className={`nav-item ${
-						activeView === "Cases" ? "active" : ""
-					}`}
+					className={`nav-item ${activeView === "Cases" ? "active" : ""
+						}`}
 					onClick={() => handleViewChange("Cases")}
 				>
 					<span className="emoji">⚠️</span> Cases
+				</button>
+				<button
+					className={`nav-item ${activeView === "Transcripts" ? "active" : ""
+						}`}
+					onClick={() => handleViewChange("Transcripts")}
+				>
+					<span className="emoji">📝</span> Transcripts
 				</button>
 			</div>
 		</div>

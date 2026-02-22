@@ -3,10 +3,28 @@ export type CasePriority = "Purple" | "Red" | "Orange" | "Yellow" | "Green";
 
 export interface CaseInfo {
     id: string;
-    priority: CasePriority;
-    type: string;
+    session_id?: string;
+    lat: number;
+    lon: number;
     location: string;
-    reportedTime: string;
-    lat?: number;
-    lng?: number;
+    type: string;
+    priority: CasePriority;
+    weight: number;
+    status: "open" | "in_progress" | "resolved";
+    reported_at: string;
+    updated_at: string;
+}
+
+export interface DispatchSuggestion {
+    suggestionId: string;
+    vehicleId: string;
+    incidentId: string;
+    incident: {
+        type: string;
+        priority: string;
+        location: string;
+        lat: number;
+        lon: number;
+    };
+    routePreview: google.maps.LatLngLiteral[];
 }

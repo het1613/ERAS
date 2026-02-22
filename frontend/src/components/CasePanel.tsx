@@ -1,60 +1,12 @@
 // CasesPanel.tsx
-import React from "react";
 import "./CasePanel.css";
-import CaseCard from "./CaseCard"; // <--- IMPORT THE NEW COMPONENT
-import { CaseInfo, CasePriority } from "./types"; // <--- IMPORT SHARED TYPES
-
-// --- Mock Data (Stays here because the parent manages the list) ---
-const mockCases: CaseInfo[] = [
-	{
-		id: "Case-001",
-		priority: "Purple",
-		type: "Cardiac Arrest",
-		location: "234 Columbia Street",
-		reportedTime: "17:35",
-	},
-	{
-		id: "Case-002",
-		priority: "Purple",
-		type: "Cardiac Arrest",
-		location: "234 Columbia Street",
-		reportedTime: "17:35",
-	},
-	{
-		id: "Case-003",
-		priority: "Red",
-		type: "Cardiac Arrest",
-		location: "234 Columbia Street",
-		reportedTime: "17:35",
-	},
-	{
-		id: "Case-004",
-		priority: "Orange",
-		type: "Broken Hand",
-		location: "994 Columbia Street",
-		reportedTime: "17:30",
-	},
-	{
-		id: "Case-005",
-		priority: "Yellow",
-		type: "Flu Symptoms",
-		location: "123 Main Street",
-		reportedTime: "17:20",
-	},
-	{
-		id: "Case-006",
-		priority: "Green",
-		type: "Minor Cuts",
-		location: "456 Side Road",
-		reportedTime: "17:15",
-	},
-];
+import CaseCard, { DispatchInfo } from "./CaseCard";
+import { CaseInfo, CasePriority } from "./types";
 
 type PriorityCounts = {
 	[key in CasePriority]?: number;
 };
 
-// Map priorities to a display color for buttons (Stays here for the top filters)
 const priorityColorMap: Record<CasePriority, string> = {
 	Purple: "purple-text",
 	Red: "red-text",
@@ -63,23 +15,33 @@ const priorityColorMap: Record<CasePriority, string> = {
 	Green: "green-text",
 };
 
-// --- Case Counting Logic ---
-const priorityCounts: PriorityCounts = mockCases.reduce((acc, c) => {
-	acc[c.priority] = (acc[c.priority] || 0) + 1;
-	return acc;
-}, {} as PriorityCounts);
-
-export type ActiveView = "Ambulances" | "Cases";
+export type ActiveView = "Ambulances" | "Cases" | "Transcripts";
 
 interface PanelProps {
 	activeView: ActiveView;
 	handleViewChange: (view: ActiveView) => void;
+	incidents: CaseInfo[];
+	loading?: boolean;
+	onDispatch?: (incidentId: string) => void;
+	dispatchLoading?: boolean;
+	dispatchInfoMap?: Record<string, DispatchInfo>;
 }
 
 export default function CasesPanel({
 	activeView,
 	handleViewChange,
+	incidents,
+	loading = false,
+	onDispatch,
+	dispatchLoading,
+	dispatchInfoMap = {},
 }: PanelProps): JSX.Element {
+
+	const priorityCounts: PriorityCounts = incidents.reduce((acc, c) => {
+		acc[c.priority] = (acc[c.priority] || 0) + 1;
+		return acc;
+	}, {} as PriorityCounts);
+
 	return (
 		<div className="dispatch-panel cases-panel">
 			{/* Top Bar with Title */}
@@ -96,9 +58,8 @@ export default function CasesPanel({
 							return (
 								<button
 									key={priority}
-									className={`filter ${priority.toLowerCase()} ${
-										priorityColorMap[priority]
-									}`}
+									className={`filter ${priority.toLowerCase()} ${priorityColorMap[priority]
+										}`}
 								>
 									{count} {priority}
 								</button>
@@ -112,31 +73,48 @@ export default function CasesPanel({
 			<div className="active-cases">
 				<h3 className="section-title">Active Cases</h3>
 
-				{/* Case List - NOW MUCH CLEANER! */}
+				{/* Case List */}
 				<div className="case-list">
-					{mockCases.map((c) => (
-						<CaseCard key={c.id} data={c} />
-					))}
+					{loading ? (
+						<p>Loading incidents...</p>
+					) : incidents.length === 0 ? (
+						<p>No incidents reported.</p>
+					) : (
+						incidents.map((c) => (
+							<CaseCard
+								key={c.id}
+								data={c}
+								onDispatch={onDispatch}
+								dispatchLoading={dispatchLoading}
+								dispatchInfo={dispatchInfoMap[c.id]}
+							/>
+						))
+					)}
 				</div>
 			</div>
 
 			{/* Bottom Navigation */}
 			<div className="bottom-nav">
 				<button
-					className={`nav-item ${
-						activeView === "Ambulances" ? "active" : ""
-					}`}
+					className={`nav-item ${activeView === "Ambulances" ? "active" : ""
+						}`}
 					onClick={() => handleViewChange("Ambulances")}
 				>
 					<span className="emoji">🚑</span> Ambulances
 				</button>
 				<button
-					className={`nav-item ${
-						activeView === "Cases" ? "active" : ""
-					}`}
+					className={`nav-item ${activeView === "Cases" ? "active" : ""
+						}`}
 					onClick={() => handleViewChange("Cases")}
 				>
 					<span className="emoji">⚠️</span> Cases
+				</button>
+				<button
+					className={`nav-item ${activeView === "Transcripts" ? "active" : ""
+						}`}
+					onClick={() => handleViewChange("Transcripts")}
+				>
+					<span className="emoji">📝</span> Transcripts
 				</button>
 			</div>
 		</div>
