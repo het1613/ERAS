@@ -7,4 +7,6 @@ export interface CaseInfo {
     type: string;
     location: string;
     reportedTime: string;
+    lat?: number;
+    lng?: number;
 }
