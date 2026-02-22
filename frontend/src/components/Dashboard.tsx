@@ -153,12 +153,6 @@ const Dashboard = () => {
 	return (
 		<div className="dashboard">
 			<div className="dashboard-left">
-				{/*
-                    If the navigation is inside the panels, we need to ensure TranscriptPanel also has it.
-                    Or we should move navigation here.
-                    Let's see where the navigation is.
-                */}
-				{/* Render the selected panel based on state */}
 				{renderLeftPanel()}
 			</div>
 			<div className="dashboard-right">
