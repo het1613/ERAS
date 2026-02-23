@@ -61,3 +61,11 @@ CREATE TABLE IF NOT EXISTS incidents (
 CREATE INDEX IF NOT EXISTS idx_incidents_status ON incidents(status);
 CREATE INDEX IF NOT EXISTS idx_incidents_session_id ON incidents(session_id);
 
+-- Hospitals table
+CREATE TABLE IF NOT EXISTS hospitals (
+    id SERIAL PRIMARY KEY,
+    name VARCHAR(255) NOT NULL,
+    lat DECIMAL(10, 8) NOT NULL,
+    lon DECIMAL(11, 8) NOT NULL
+);
+

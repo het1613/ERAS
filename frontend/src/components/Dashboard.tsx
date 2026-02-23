@@ -1,4 +1,5 @@
-import { useState, useMemo } from "react";
+import { useState, useMemo, useEffect } from "react";
+import { Hospital } from "./types";
 import TranscriptPanel from "./TranscriptPanel";
 import MapPanel from "./MapPanel";
 import "./Dashboard.css";
@@ -48,6 +49,15 @@ const Dashboard = () => {
 		accept,
 		declineAndReassign,
 	} = useDispatchSuggestion();
+
+	const [hospitals, setHospitals] = useState<Hospital[]>([]);
+	const apiUrl = import.meta.env.VITE_API_URL || "http://localhost:8000";
+	useEffect(() => {
+		fetch(`${apiUrl}/hospitals`)
+			.then((res) => res.json())
+			.then((data) => setHospitals(data))
+			.catch((err) => console.error("Failed to fetch hospitals:", err));
+	}, [apiUrl]);
 
 	// Server-side auto-dispatch handles new incidents now — no client-side callback needed
 	const { incidents } = useIncidents();
@@ -161,6 +171,7 @@ const Dashboard = () => {
 					focusedUnit={focusedUnit}
 					routes={routes}
 					incidents={activeIncidents}
+					hospitals={hospitals}
 					dispatchSuggestion={suggestion}
 					onAcceptSuggestion={accept}
 					onDeclineSuggestion={declineAndReassign}
