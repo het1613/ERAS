@@ -589,6 +589,22 @@ async def geocode_address(req: GeocodeRequest):
 
 # --- ACR Code & Suggestion Accept/Dismiss endpoints ---
 
+@app.get("/hospitals")
+async def list_hospitals():
+    """Return all hospitals."""
+    conn = get_connection()
+    try:
+        with conn.cursor() as cur:
+            cur.execute("SELECT id, name, lat, lon FROM hospitals ORDER BY name")
+            rows = cur.fetchall()
+            return [
+                {"id": r[0], "name": r[1], "lat": float(r[2]), "lon": float(r[3])}
+                for r in rows
+            ]
+    finally:
+        conn.close()
+
+
 @app.get("/acr-codes")
 async def list_acr_codes():
     """Return all Ontario ACR Problem Codes for frontend dropdowns."""

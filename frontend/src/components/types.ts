@@ -15,6 +15,13 @@ export interface CaseInfo {
     updated_at: string;
 }
 
+export interface Hospital {
+    id: number;
+    name: string;
+    lat: number;
+    lon: number;
+}
+
 export interface DispatchSuggestion {
     suggestionId: string;
     vehicleId: string;

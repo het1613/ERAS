@@ -10,7 +10,8 @@ import "./MapPanel.css";
 import { AmbulanceMapIcon } from "./AmbulanceMapIcon";
 import { IncidentMapIcon } from "./IncidentMapIcon";
 import { UnitInfo } from "./AmbulancePanel";
-import { CaseInfo, CasePriority, DispatchSuggestion } from "./types";
+import { CaseInfo, CasePriority, DispatchSuggestion, Hospital } from "./types";
+import hospitalIcon from "../assets/hospital_map_icon.png";
 
 const getPriorityColor = (p: string) => {
 	switch (p) {
@@ -34,6 +35,7 @@ interface MapPanelProps {
 	focusedUnit: UnitInfo | null;
 	routes?: Array<[string, google.maps.LatLngLiteral[]]>;
 	incidents?: CaseInfo[];
+	hospitals?: Hospital[];
 	dispatchSuggestion?: DispatchSuggestion | null;
 	onAcceptSuggestion?: () => void;
 	onDeclineSuggestion?: () => void;
@@ -97,6 +99,7 @@ export default function MapPanel({
 	focusedUnit,
 	routes = [],
 	incidents = [],
+	hospitals = [],
 	dispatchSuggestion,
 	onAcceptSuggestion,
 	onDeclineSuggestion,
@@ -420,6 +423,21 @@ export default function MapPanel({
 									</div>
 								</div>
 							)}
+						</div>
+					</OverlayView>
+				))}
+				{hospitals.map((hospital) => (
+					<OverlayView
+						key={`hospital-${hospital.id}`}
+						position={{ lat: hospital.lat, lng: hospital.lon }}
+						mapPaneName={OverlayView.OVERLAY_MOUSE_TARGET}
+					>
+						<div className="map-marker-container" title={hospital.name}>
+							<img
+								src={hospitalIcon}
+								alt={hospital.name}
+								style={{ width: 40, height: 40 }}
+							/>
 						</div>
 					</OverlayView>
 				))}
