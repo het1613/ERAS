@@ -1,4 +1,5 @@
 // CasesPanel.tsx
+import { useEffect, useRef, useMemo } from "react";
 import "./CasePanel.css";
 import CaseCard, { DispatchInfo } from "./CaseCard";
 import { CaseInfo, CasePriority } from "./types";
@@ -25,6 +26,7 @@ interface PanelProps {
 	onDispatch?: (incidentId: string) => void;
 	dispatchLoading?: boolean;
 	dispatchInfoMap?: Record<string, DispatchInfo>;
+	focusedIncidentId?: string | null;
 }
 
 export default function CasesPanel({
@@ -35,7 +37,26 @@ export default function CasesPanel({
 	onDispatch,
 	dispatchLoading,
 	dispatchInfoMap = {},
+	focusedIncidentId,
 }: PanelProps): JSX.Element {
+	const caseListRef = useRef<HTMLDivElement | null>(null);
+
+	// Sort incidents so the focused one is at the top
+	const sortedIncidents = useMemo(() => {
+		if (!focusedIncidentId) return incidents;
+		return [...incidents].sort((a, b) => {
+			if (a.id === focusedIncidentId) return -1;
+			if (b.id === focusedIncidentId) return 1;
+			return 0;
+		});
+	}, [incidents, focusedIncidentId]);
+
+	// Scroll the list container to the top when a focused incident changes
+	useEffect(() => {
+		if (focusedIncidentId && caseListRef.current) {
+			caseListRef.current.scrollTop = 0;
+		}
+	}, [focusedIncidentId]);
 
 	const priorityCounts: PriorityCounts = incidents.reduce((acc, c) => {
 		acc[c.priority] = (acc[c.priority] || 0) + 1;
@@ -74,13 +95,13 @@ export default function CasesPanel({
 				<h3 className="section-title">Active Cases</h3>
 
 				{/* Case List */}
-				<div className="case-list">
+				<div className="case-list" ref={caseListRef}>
 					{loading ? (
 						<p>Loading incidents...</p>
-					) : incidents.length === 0 ? (
+					) : sortedIncidents.length === 0 ? (
 						<p>No incidents reported.</p>
 					) : (
-						incidents.map((c) => (
+						sortedIncidents.map((c) => (
 							<CaseCard
 								key={c.id}
 								data={c}

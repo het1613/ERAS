@@ -36,6 +36,8 @@ function vehicleToUnit(v: VehicleData): UnitInfo {
 const Dashboard = () => {
 	const [activeView, setActiveView] = useState<ActiveView>("Ambulances");
 	const [focusedUnit, setFocusedUnit] = useState<UnitInfo | null>(null);
+	const [focusedUnitId, setFocusedUnitId] = useState<string | null>(null);
+	const [focusedIncidentId, setFocusedIncidentId] = useState<string | null>(null);
 	const [selectedSessionId, setSelectedSessionId] = useState<string | null>(
 		null
 	);
@@ -47,6 +49,7 @@ const Dashboard = () => {
 		loading: dispatchLoading,
 		findBest,
 		accept,
+		decline,
 		declineAndReassign,
 	} = useDispatchSuggestion();
 
@@ -126,6 +129,16 @@ const Dashboard = () => {
 		setActiveView(view);
 	};
 
+	const handleIncidentClick = (incidentId: string) => {
+		setActiveView("Cases");
+		setFocusedIncidentId(incidentId);
+	};
+
+	const handleAmbulanceClick = (unitId: string) => {
+		setActiveView("Ambulances");
+		setFocusedUnitId(unitId);
+	};
+
 	const renderLeftPanel = () => {
 		if (activeView === "Ambulances") {
 			return (
@@ -134,6 +147,7 @@ const Dashboard = () => {
 					handleViewChange={handleViewChange}
 					units={units}
 					onUnitClick={(unit) => setFocusedUnit(unit)}
+					focusedUnitId={focusedUnitId}
 				/>
 			);
 		} else if (activeView === "Cases") {
@@ -146,6 +160,7 @@ const Dashboard = () => {
 					onDispatch={findBest}
 					dispatchLoading={dispatchLoading}
 					dispatchInfoMap={dispatchInfoMap}
+					focusedIncidentId={focusedIncidentId}
 				/>
 			);
 		} else {
@@ -174,7 +189,12 @@ const Dashboard = () => {
 					hospitals={hospitals}
 					dispatchSuggestion={suggestion}
 					onAcceptSuggestion={accept}
+					onDismissSuggestion={decline}
 					onDeclineSuggestion={declineAndReassign}
+					onIncidentClick={handleIncidentClick}
+					onDispatch={findBest}
+					dispatchLoading={dispatchLoading}
+					onAmbulanceClick={handleAmbulanceClick}
 				/>
 			</div>
 		</div>

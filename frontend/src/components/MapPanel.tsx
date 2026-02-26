@@ -38,7 +38,12 @@ interface MapPanelProps {
 	hospitals?: Hospital[];
 	dispatchSuggestion?: DispatchSuggestion | null;
 	onAcceptSuggestion?: () => void;
+	onDismissSuggestion?: () => void;
 	onDeclineSuggestion?: () => void;
+	onIncidentClick?: (incidentId: string) => void;
+	onDispatch?: (incidentId: string) => void;
+	dispatchLoading?: boolean;
+	onAmbulanceClick?: (unitId: string) => void;
 }
 
 const PRIORITY_COLORS: Record<CasePriority, string> = {
@@ -102,7 +107,12 @@ export default function MapPanel({
 	hospitals = [],
 	dispatchSuggestion,
 	onAcceptSuggestion,
+	onDismissSuggestion,
 	onDeclineSuggestion,
+	onIncidentClick,
+	onDispatch,
+	dispatchLoading,
+	onAmbulanceClick,
 }: MapPanelProps) {
 	const apiKey = import.meta.env.VITE_GOOGLE_MAPS_API_KEY;
 	const { isLoaded } = useLoadScript({ googleMapsApiKey: apiKey! });
@@ -131,6 +141,7 @@ export default function MapPanel({
 					mapRef.current = map;
 				}}
 				mapContainerStyle={{ width: "100%", height: "100%" }}
+				options={{ clickableIcons: false }}
 			>
 				{units.map((unit) => {
 					const position = parseCoords(unit.coords);
@@ -151,6 +162,8 @@ export default function MapPanel({
 						>
 							<div
 								className={`map-marker-container map-status-${statusClass}${isDispatched ? " map-marker-dispatched" : ""}${isSuggested ? " map-marker-suggested" : ""}`}
+								onClick={() => onAmbulanceClick?.(unit.id)}
+								style={{ cursor: "pointer" }}
 							>
 								<AmbulanceMapIcon className="ambulance-svg" />
 							</div>
@@ -180,7 +193,7 @@ export default function MapPanel({
 								options={{
 									pixelOffset: new google.maps.Size(0, -30),
 								}}
-								onCloseClick={onDeclineSuggestion}
+								onCloseClick={onDismissSuggestion}
 							>
 								<div
 									style={{
@@ -327,7 +340,8 @@ export default function MapPanel({
 							className="map-marker-container"
 							onMouseEnter={() => setHoveredIncidentId(incident.id)}
 							onMouseLeave={() => setHoveredIncidentId(null)}
-							style={{ position: "relative" }}
+							onClick={() => onIncidentClick?.(incident.id)}
+							style={{ position: "relative", cursor: "pointer" }}
 						>
 							<IncidentMapIcon
 								className="incident-svg"
@@ -340,15 +354,18 @@ export default function MapPanel({
 										bottom: "100%",
 										left: "50%",
 										transform: "translateX(-50%)",
-										marginBottom: 8,
+										paddingBottom: 8,
+										zIndex: 10,
+									}}
+								>
+								<div
+									style={{
 										background: "#fff",
 										borderRadius: 8,
 										boxShadow: "0 2px 12px rgba(0,0,0,0.18)",
 										padding: "10px 14px",
 										fontFamily: "sans-serif",
 										minWidth: 180,
-										zIndex: 10,
-										pointerEvents: "none",
 									}}
 								>
 									<div
@@ -418,9 +435,32 @@ export default function MapPanel({
 									>
 										{incident.location}
 									</div>
-									<div style={{ fontSize: 11, color: "#888" }}>
+									<div style={{ fontSize: 11, color: "#888", marginBottom: 8 }}>
 										Reported at {formatTime(incident.reported_at)}
 									</div>
+									{incident.status === "open" && onDispatch && (
+										<button
+											onClick={(e) => {
+												e.stopPropagation();
+												onDispatch(incident.id);
+											}}
+											disabled={dispatchLoading}
+											style={{
+												width: "100%",
+												padding: "6px 0",
+												border: "none",
+												borderRadius: 6,
+												background: dispatchLoading ? "#94a3b8" : "#2563eb",
+												color: "#fff",
+												fontWeight: 600,
+												fontSize: 12,
+												cursor: dispatchLoading ? "not-allowed" : "pointer",
+											}}
+										>
+											{dispatchLoading ? "Finding..." : "Dispatch"}
+										</button>
+									)}
+								</div>
 								</div>
 							)}
 						</div>

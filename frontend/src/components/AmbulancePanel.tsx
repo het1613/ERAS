@@ -1,4 +1,4 @@
-import { useMemo } from "react";
+import { useMemo, useEffect, useRef } from "react";
 import "./AmbulancePanel.css";
 import AmbulanceCard from "./AmbulanceCard";
 
@@ -26,6 +26,7 @@ interface PanelProps {
 	handleViewChange: (view: ActiveView) => void;
 	units: UnitInfo[];
 	onUnitClick: (unit: UnitInfo) => void;
+	focusedUnitId?: string | null;
 }
 
 const STATUS_FILTER_ORDER: { key: UnitStatus; cssClass: string }[] = [
@@ -40,7 +41,25 @@ export default function AmbulancePanel({
 	handleViewChange,
 	units,
 	onUnitClick,
+	focusedUnitId,
 }: PanelProps) {
+	const unitListRef = useRef<HTMLDivElement | null>(null);
+
+	const sortedUnits = useMemo(() => {
+		if (!focusedUnitId) return units;
+		return [...units].sort((a, b) => {
+			if (a.id === focusedUnitId) return -1;
+			if (b.id === focusedUnitId) return 1;
+			return 0;
+		});
+	}, [units, focusedUnitId]);
+
+	useEffect(() => {
+		if (focusedUnitId && unitListRef.current) {
+			unitListRef.current.scrollTop = 0;
+		}
+	}, [focusedUnitId]);
+
 	const statusCounts = useMemo(() => {
 		const counts: Record<string, number> = {};
 		for (const u of units) {
@@ -72,8 +91,8 @@ export default function AmbulancePanel({
 				<h3 className="section-title">Active Units</h3>
 
 				{/* Unit List */}
-				<div className="unit-list">
-					{units.map((u) => (
+				<div className="unit-list" ref={unitListRef}>
+					{sortedUnits.map((u) => (
 						// Wrap the card in a div to handle the click
 						<div
 							key={u.id}
