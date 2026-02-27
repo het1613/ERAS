@@ -11,7 +11,7 @@ frontend (React/Vite, :3000)
 dashboard-api (FastAPI, :8000)  <-- REST + WebSocket gateway, incident CRUD, Kafka consumer
   |
   +---> geospatial-dispatch (FastAPI, :8002)  <-- vehicle tracking, assignment optimization
-  +---> postgres (:5432)                       <-- sessions, transcripts, suggestions, incidents, vehicles
+  +---> postgres (:5432)                       <-- sessions, transcripts, suggestions, incidents, dispatches, incident_events, vehicles
   +---> kafka (:9092 external / :29092 internal)
   |
 audio-ingestion (:8001) --> kafka --> audio-processing --> kafka --> suggestion-engine --> kafka --> dashboard-api
@@ -25,72 +25,99 @@ audio-ingestion (:8001) --> kafka --> audio-processing --> kafka --> suggestion-
   - `kafka_client.py` — Kafka producer/consumer helpers
   - `db.py` — `get_connection()` returns psycopg2 connection via `DATABASE_URL` env var
 - `infrastructure/postgres/init.sql` — DB schema (runs on first postgres init only)
+- `infrastructure/postgres/migrate_v2.sql` — Migration for existing volumes (expanded suggestions, dispatches, incident_events tables)
 - `frontend/src/` — React app with Vite
 
 ## Database
 
-PostgreSQL 15. Tables: `sessions`, `transcripts`, `suggestions`, `vehicles`, `incidents`.
+PostgreSQL 15. Tables: `sessions`, `transcripts`, `suggestions`, `vehicles`, `incidents`, `dispatches`, `incident_events`.
+
+**All data is persisted to PostgreSQL.** Sessions, transcripts, and suggestions are written to DB on Kafka consumption. Only ephemeral vehicle statuses remain in-memory (they rebuild from live Kafka messages on restart).
 
 The `incidents` table is the source of truth for all incident state. Schema:
 ```
-id (PK), session_id (FK->sessions), lat, lon, location, type, priority, weight, status, reported_at, updated_at
+id (PK), session_id (FK->sessions), lat, lon, location, type, priority, weight,
+status, source, assigned_vehicle_id, dispatch_metadata (JSONB), reported_at, updated_at
 ```
+
+The `suggestions` table stores all structured fields from the Suggestion Pydantic model (id is VARCHAR PK matching the suggestion engine's ID, not SERIAL).
+
+The `dispatches` table persists active dispatch routes (replaces old in-memory `active_routes` dict):
+```
+id (SERIAL PK), incident_id (FK), vehicle_id, route (JSONB), status (active/completed), created_at, completed_at
+```
+
+The `incident_events` table is an audit log of every status transition:
+```
+id (SERIAL PK), incident_id (FK), event_type, old_status, new_status, vehicle_id, timestamp, metadata (JSONB)
+```
+
+**Incident statuses:** `open` → `dispatched` → `en_route` → `on_scene` → `transporting` → `at_hospital` → `resolved`
+
+**Incident source:** `call_taker` (from suggestion acceptance or manual call-taker entry) or `manual` (from POST /incidents without source override). The dispatcher Cases tab only shows `call_taker` incidents.
 
 Priority-to-weight mapping (auto-set when weight omitted): Purple=16, Red=8, Orange=4, Yellow=2, Green=1. Defined in `shared/types.py:PRIORITY_WEIGHT_MAP`.
 
-**Important:** `init.sql` only runs on first postgres volume creation. If you add tables, either recreate the volume (`docker compose down -v && docker compose up`) or run the SQL manually: `docker exec eras-postgres psql -U eras_user -d eras_db -c "SQL HERE"`.
+**Important:** `init.sql` only runs on first postgres volume creation. For existing volumes, run the migration: `docker exec eras-postgres psql -U eras_user -d eras_db < infrastructure/postgres/migrate_v2.sql`. Or recreate the volume: `docker compose down -v && docker compose up`.
 
 ## Incidents Flow
 
-1. **Create:** `POST /incidents` on dashboard-api writes to DB, broadcasts `incident_created` over WebSocket
-2. **List/Get:** `GET /incidents[?status=open]`, `GET /incidents/{id}` on dashboard-api reads from DB
-3. **Update:** `PATCH /incidents/{id}` on dashboard-api updates DB, broadcasts `incident_updated` over WebSocket
-4. **Auto-Dispatch (server-side):** When call-taker accepts a suggestion (`POST /suggestions/{id}/accept`), dashboard-api creates the incident AND immediately calls geospatial-dispatch `find-best`. The result is broadcast via a `dispatch_suggestion` WebSocket message to all connected Dashboard clients. No client-side auto-dispatch needed.
-5. **Find-Best:** `POST /assignments/find-best` runs ILP optimizer, fetches OSRM route preview, returns suggestion with `route_preview` (list of `[lat, lon]`) and `incident` details. Accepts optional `exclude_vehicles` list to skip previously declined vehicles. Does NOT change incident status. Stores route in `vehicle_assignments` for reuse on accept.
-6. **Accept:** `POST /assignments/{suggestion_id}/accept` sets incident to `in_progress`, marks vehicle as dispatched, reuses pre-fetched route (falls back to OSRM if missing), publishes `vehicle-dispatches` Kafka event.
-7. **Decline:** `POST /assignments/{suggestion_id}/decline` removes suggestion from memory. No status changes.
-8. **Decline-and-Reassign:** `POST /assignments/{suggestion_id}/decline-and-reassign` declines the current suggestion, adds the vehicle to an exclude list for the incident, and automatically re-runs find-best with excluded vehicles. Broadcasts the new `dispatch_suggestion` via WebSocket. This allows the dispatcher to cycle through available vehicles.
-9. **Arrival:** Simulator publishes `vehicle-arrivals` Kafka event when vehicle reaches destination. Dashboard-api consumes it, marks incident `resolved` in DB, resets vehicle status to `available`, clears active route, broadcasts `incident_updated` via WebSocket. Geospatial-dispatch consumes it and resets vehicle status to `available`.
+1. **Create (call taker via AI):** `POST /suggestions/{id}/accept` on dashboard-api creates incident with `source='call_taker'`, writes to DB, broadcasts `incident_created` over WebSocket, auto-triggers dispatch optimization.
+2. **Create (call taker manual):** `POST /incidents` with `source='call_taker'` creates incident, broadcasts, and auto-triggers dispatch (same as AI-accepted). Used by the Manual Incident Entry form in the call-taker UI.
+3. **Create (testing):** `POST /incidents` without `source` (defaults to `'manual'`). These do NOT appear in dispatcher Cases tab.
+4. **List/Get:** `GET /incidents[?status=open&source=call_taker]`, `GET /incidents/{id}` on dashboard-api reads from DB.
+5. **Update:** `PATCH /incidents/{id}` on dashboard-api updates DB, logs to `incident_events`, broadcasts `incident_updated` over WebSocket.
+6. **Auto-Dispatch (server-side):** When call-taker accepts a suggestion or creates a manual call-taker incident, dashboard-api creates the incident AND immediately calls geospatial-dispatch `find-best`. The result is broadcast via a `dispatch_suggestion` WebSocket message.
+7. **Find-Best:** `POST /assignments/find-best` runs ILP optimizer, fetches OSRM route preview, returns suggestion. Accepts optional `exclude_vehicles` list. Does NOT change incident status. Stores route in `vehicle_assignments` for reuse on accept.
+8. **Accept:** `POST /assignments/{suggestion_id}/accept` marks vehicle as dispatched, publishes `vehicle-dispatches` Kafka event. Dashboard-api consumes the dispatch event and transitions incident to `dispatched`, sets `assigned_vehicle_id`, persists route in `dispatches` table.
+9. **Decline:** `POST /assignments/{suggestion_id}/decline` removes suggestion from memory. No status changes.
+10. **Decline-and-Reassign:** `POST /assignments/{suggestion_id}/decline-and-reassign` declines the current suggestion, persists declined vehicle in `dispatch_metadata` JSONB, re-runs find-best with excluded vehicles.
+
+### Full Case Lifecycle (via Kafka events from simulator):
+1. **dispatched** → Vehicle dispatched to scene (from `vehicle-dispatches` Kafka topic)
+2. **on_scene** → Vehicle arrived at scene (from `vehicle-arrivals` topic)
+3. **transporting** → Vehicle leaving scene heading to Grand River Hospital (from `vehicle-transporting` topic, includes OSRM route)
+4. **at_hospital** → Vehicle arrived at hospital (from `vehicle-at-hospital` topic)
+5. **resolved** → Case complete, vehicle returning to available (from `vehicle-resolved` topic)
+
+Each status transition is logged in `incident_events` and broadcast as `incident_updated` via WebSocket.
 
 All assignment endpoints are proxied through dashboard-api (:8000) so the frontend only talks to one service.
-
-Frontend `useIncidents` hook fetches `GET /incidents` on mount, then listens for `incident_created`/`incident_updated` WebSocket messages.
 
 ## Vehicle Tracking
 
 Vehicles are initialized in-memory (`MOCK_VEHICLES` in geospatial-dispatch) but their positions are updated in real-time from the `vehicle-locations` Kafka topic. `VehicleLocationTracker` runs a background Kafka consumer that updates `Vehicle.lat`/`.lon` in-place. The `vehicles` table exists in postgres but is not currently read/written by services — Kafka is the source of truth for positions.
 
-**Vehicle status tracking:** Dashboard-api maintains an in-memory `vehicle_statuses` dict, updated on `vehicle-dispatches` (→ `"dispatched"`) and `vehicle-arrivals` (→ `"available"`). Every `vehicle_location` WS broadcast is enriched with `status` so the frontend always has current status from the backend — no separate status events needed.
+**Vehicle status tracking:** Dashboard-api maintains an in-memory `vehicle_statuses` dict, updated from simulator status in `vehicle-locations` messages and lifecycle events. Every `vehicle_location` WS broadcast is enriched with `status`.
 
-**Active routes persistence:** Dashboard-api stores active dispatch routes in `active_routes` dict (vehicle_id → {incident_id, route}). Populated on dispatch, cleared on arrival. Exposed via `GET /active-routes` so frontend can recover routes after page refresh.
+**Active routes persistence:** Dashboard-api persists active dispatch routes in the `dispatches` table (not in-memory). Populated on dispatch, cleared on arrival/completion. Exposed via `GET /active-routes` so frontend can recover routes after page refresh. Routes survive service restarts.
 
-**Frontend** `useVehicleUpdates` hook: fetches `GET /vehicles` + `GET /active-routes` on mount, then receives live updates via WS. Reads vehicle status from `vehicle_location` messages (backend is source of truth). Reads routes from `vehicle_dispatched` WS messages + initial `active-routes` REST fetch.
+**Frontend** `useVehicleUpdates` hook: fetches `GET /vehicles` + `GET /active-routes` on mount, then receives live updates via WS. Reads vehicle status from `vehicle_location` messages. Reads routes from `vehicle_dispatched` WS messages + initial `active-routes` REST fetch.
 
 ## Dispatch Routing (OSRM)
 
-When an assignment is accepted (`POST /assignments/{id}/accept`), geospatial-dispatch:
-1. Fetches a driving route from OSRM (`https://router.project-osrm.org/route/v1/driving/...`) — free, no API key
-2. Publishes a `VehicleDispatchEvent` to the `vehicle-dispatches` Kafka topic containing the full route geometry as `[[lat, lon], ...]`
+When an assignment is accepted, geospatial-dispatch fetches a driving route from OSRM and publishes a `VehicleDispatchEvent` to `vehicle-dispatches`.
 
-**Kafka topic: `vehicle-dispatches`** — consumed by both the simulator and dashboard-api.
+**Hospital:** Grand River Hospital at 835 King St W, Kitchener, ON N2G 1G3 (43.455280, -80.505836). After on-scene time, the simulator fetches an OSRM route from the scene to the hospital and the ambulance follows it.
 
 **Simulator** (`scripts/simulate_vehicle_locations.py`):
-- Runs a background thread consuming `vehicle-dispatches`; stores route waypoints in a thread-safe `vehicle_routes` dict
-- Each 2s tick: dispatched vehicles advance along waypoints at ~60 km/h (Haversine interpolation); non-dispatched vehicles random-walk
-- On arrival: route is removed, publishes `VehicleArrivalEvent` to `vehicle-arrivals` Kafka topic, then resumes random walk; prints `[ROUTED]`/`[RANDOM]`/`[ARRIVED]` per vehicle
+- Full lifecycle: `available → dispatched → on_scene (30s) → transporting (to hospital) → at_hospital (20s) → returning (30s) → available`
+- Dispatched vehicles follow OSRM routes at ~60 km/h; idle vehicles random-walk
+- Publishes events to: `vehicle-arrivals` (at scene), `vehicle-transporting` (leaving scene), `vehicle-at-hospital` (at hospital), `vehicle-resolved` (case complete)
 - Start with: `KAFKA_BOOTSTRAP_SERVERS=localhost:9092 python scripts/simulate_vehicle_locations.py`
 
-**Dashboard-API**: consumes `vehicle-dispatches`, stores in `active_routes`, broadcasts `{type: "vehicle_dispatched", data: {vehicle_id, incident_id, route: [{lat, lng}...]}}` via WebSocket. Route coords are converted from `[lat, lon]` to `{lat, lng}` for Google Maps.
+**Dashboard-API**: consumes all lifecycle Kafka topics, persists dispatch routes in `dispatches` table, transitions incident statuses, broadcasts updates via WebSocket.
 
-**Frontend dispatch UI** (`frontend/src/`):
-- `hooks/useDispatchSuggestion.ts` — manages active dispatch suggestion state. Methods: `findBest(incidentId)`, `accept()`, `decline()`, `declineAndReassign()`. Also listens for `dispatch_suggestion` WebSocket messages (server-pushed suggestions).
-- `components/types.ts` — `DispatchSuggestion` interface (suggestionId, vehicleId, incidentId, incident details, routePreview coords).
-- `components/CaseCard.tsx` — "Dispatch" button on open incidents (manual fallback). Shows dispatch lifecycle status (finding, suggested, dispatched, en route, arrived) and assigned vehicle name via `DispatchInfo` prop.
-- `components/MapPanel.tsx` — when `dispatchSuggestion` prop is set: renders an `<InfoWindow>` on the recommended ambulance marker (vehicle name, incident type/priority/location + Accept/"Suggest Another" buttons) and a dashed orange `<Polyline>` for the preview route. Dispatched ambulances have a pulsing blue ring, suggested ambulances have a pulsing orange ring. Active dispatch routes render as solid blue polylines (existing behavior).
-- `components/Dashboard.tsx` — wires `useDispatchSuggestion` hook. Server-side auto-dispatch handles new incidents, so no client-side `onNewIncident` callback is needed. Builds a `dispatchInfoMap` from routes/incidents/suggestion state and passes it to CasesPanel. Passes `declineAndReassign` (not `decline`) to MapPanel so the dispatcher can cycle through alternative vehicles.
-- `hooks/useVehicleUpdates.ts` — exposes `incidentVehicleMap` (incident_id -> vehicle_id) alongside vehicles and routes, used by Dashboard to build dispatch info.
+**Frontend call-taker & dispatch UI** (`frontend/src/`):
+- `components/CallTaker.tsx` — Call-taker screen. Shows live transcript, AI suggestions with editable fields, and a **Manual Incident Entry** card always at the top of AI Suggestions (creates incidents with `source='call_taker'` via `POST /incidents`).
+- `hooks/useDispatchSuggestion.ts` — manages active dispatch suggestion state.
+- `components/types.ts` — `CaseStatus` type includes all lifecycle statuses. `CaseInfo` includes `source` and `assigned_vehicle_id`.
+- `components/CaseCard.tsx` — Shows full lifecycle progress bar: Open → Dispatched → En Route → On Scene → Transporting → At Hospital → Resolved. Shows assigned vehicle name.
+- `components/CasePanel.tsx` — "Active Cases" (non-resolved) and "Past Cases" (resolved, collapsible) sections.
+- `components/Dashboard.tsx` — Filters incidents to `source=call_taker` for the Cases tab. Builds `dispatchInfoMap` directly from incident status (status is granular enough).
+- `components/MapPanel.tsx` — Renders dispatch suggestions, routes, and ambulance markers.
 
-**Key types** in `shared/types.py`: `VehicleDispatchEvent` (vehicle_id, incident_id, incident_lat, incident_lon, route, timestamp), `VehicleArrivalEvent` (vehicle_id, incident_id, timestamp).
+**Key types** in `shared/types.py`: `VehicleDispatchEvent`, `VehicleArrivalEvent`, `VehicleTransportingEvent`, `VehicleAtHospitalEvent`, `GRAND_RIVER_HOSPITAL`, `INCIDENT_STATUSES`.
 
 **Graceful degradation**: if OSRM is unreachable, dispatch still succeeds but no route is published — vehicle falls back to random walk in the simulator.
 
@@ -99,7 +126,7 @@ When an assignment is accepted (`POST /assignments/{id}/accept`), geospatial-dis
 ```bash
 docker compose up --build        # all services
 cd frontend && npm run dev       # frontend on :3000
-KAFKA_BOOTSTRAP_SERVERS=localhost:9092 python scripts/simulate_vehicle_locations.py  # vehicle movement simulator (required for ambulance movement + arrival events)
+KAFKA_BOOTSTRAP_SERVERS=localhost:9092 python scripts/simulate_vehicle_locations.py  # vehicle movement simulator
 ```
 
 Env vars (with defaults in docker-compose.yml):
@@ -115,17 +142,27 @@ Env vars (with defaults in docker-compose.yml):
 - `suggestions` — AI suggestions from suggestion-engine
 - `vehicle-locations` — real-time GPS positions (produced by simulator, consumed by dashboard-api + geospatial-dispatch)
 - `vehicle-dispatches` — dispatch events with OSRM routes (produced by geospatial-dispatch on accept, consumed by simulator + dashboard-api)
-- `vehicle-arrivals` — arrival events (produced by simulator on route completion, consumed by dashboard-api to auto-resolve incident + geospatial-dispatch to reset vehicle to available)
+- `vehicle-arrivals` — arrival at scene events (produced by simulator, consumed by dashboard-api → sets `on_scene` + geospatial-dispatch)
+- `vehicle-transporting` — leaving scene heading to hospital (produced by simulator, consumed by dashboard-api → sets `transporting`)
+- `vehicle-at-hospital` — arrived at hospital (produced by simulator, consumed by dashboard-api → sets `at_hospital`)
+- `vehicle-resolved` — case complete (produced by simulator, consumed by dashboard-api → sets `resolved` + geospatial-dispatch → resets vehicle to `available`)
 
 ## Testing Endpoints
 
 ```bash
-# Create incident (auto-triggers dispatch suggestion on frontend)
+# Create incident manually (source=manual by default, won't show in dispatcher Cases tab)
 curl -X POST http://localhost:8000/incidents -H "Content-Type: application/json" \
   -d '{"lat":43.47,"lon":-80.54,"location":"234 Columbia St","type":"Cardiac Arrest","priority":"Purple"}'
 
-# List incidents
+# Create incident as call_taker (shows in Cases tab, auto-dispatches)
+curl -X POST http://localhost:8000/incidents -H "Content-Type: application/json" \
+  -d '{"lat":43.47,"lon":-80.54,"location":"234 Columbia St","type":"Cardiac Arrest","priority":"Purple","source":"call_taker"}'
+
+# List all incidents
 curl http://localhost:8000/incidents
+
+# List only call-taker incidents (what dispatcher sees)
+curl "http://localhost:8000/incidents?source=call_taker"
 
 # Update incident status
 curl -X PATCH http://localhost:8000/incidents/{id} -H "Content-Type: application/json" \
@@ -146,18 +183,17 @@ curl -X POST http://localhost:8000/assignments/{suggestion_id}/decline-and-reass
   -H "Content-Type: application/json" \
   -d '{"incident_id":"<uuid>","declined_vehicle_id":"ambulance-1"}'
 
-# Get active dispatch routes (survives frontend refresh)
+# Get active dispatch routes (persisted across restarts)
 curl http://localhost:8000/active-routes
 ```
 
 ## Known Limitations / TODOs
 
 - Vehicle initial state is hardcoded (`MOCK_VEHICLES`); positions update live via Kafka but the roster itself isn't dynamic
-- Vehicle statuses and active routes in dashboard-api are in-memory — lost on service restart. Consider persisting to postgres or Redis.
-- Sessions/transcripts/suggestions still stored in-memory in dashboard-api (TODO: migrate to postgres)
+- Vehicle statuses in dashboard-api are still in-memory (ephemeral) — they rebuild from Kafka on restart, which is acceptable for real-time positions
 - `on_event` startup/shutdown handlers are deprecated — should migrate to FastAPI lifespan
 - No authentication on any endpoint
 - ILP optimizer still uses Euclidean distance for assignment scoring; only post-accept routing uses OSRM
 - OSRM uses public demo server (`router.project-osrm.org`) — should self-host for production
-- Arrival auto-resolve depends on simulator running; without it, incidents must be manually resolved via `PATCH /incidents/{id}`
+- Full lifecycle depends on simulator running; without it, incidents must be manually resolved via `PATCH /incidents/{id}`
 - Only one dispatch suggestion can be active at a time in the frontend (`useDispatchSuggestion` stores a single suggestion). Queuing/multi-incident dispatch is not yet supported.

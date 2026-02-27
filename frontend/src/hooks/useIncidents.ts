@@ -29,9 +29,9 @@ export function useIncidents(options?: UseIncidentsOptions): UseIncidentsResult 
 				const res = await fetch(`${apiUrl}/incidents`);
 				if (!res.ok) throw new Error(`HTTP ${res.status}`);
 				const data = await res.json();
-				const incidents: CaseInfo[] = data.incidents ?? data;
+				const fetched: CaseInfo[] = data.incidents ?? data;
 				const map = new Map<string, CaseInfo>();
-				for (const inc of incidents) {
+				for (const inc of fetched) {
 					map.set(inc.id, inc);
 				}
 				setIncidentMap(map);

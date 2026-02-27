@@ -1,7 +1,10 @@
 """
 Simulator that publishes mock GPS updates for ambulances to Kafka.
 Dispatched vehicles follow pre-computed OSRM routes; others random-walk.
-Vehicles go through a full lifecycle: available -> dispatched -> on_scene -> returning -> available
+
+Full lifecycle:
+  available -> dispatched (to scene) -> on_scene -> transporting (to hospital)
+  -> at_hospital -> returning -> available
 
 Usage:
     KAFKA_BOOTSTRAP_SERVERS=localhost:9092 python scripts/simulate_vehicle_locations.py
@@ -15,6 +18,7 @@ import time
 import random
 import math
 import threading
+import requests as http_requests
 from collections import deque
 from datetime import datetime
 
@@ -25,8 +29,14 @@ from shared.kafka_client import create_producer, create_consumer
 LOCATION_TOPIC = "vehicle-locations"
 DISPATCH_TOPIC = "vehicle-dispatches"
 ARRIVAL_TOPIC = "vehicle-arrivals"
+TRANSPORTING_TOPIC = "vehicle-transporting"
+AT_HOSPITAL_TOPIC = "vehicle-at-hospital"
+RESOLVED_TOPIC = "vehicle-resolved"
 
-# Same starting positions as MOCK_VEHICLES in geospatial-dispatch/main.py
+GRAND_RIVER_HOSPITAL = {"lat": 43.455280, "lon": -80.505836}
+
+OSRM_BASE_URL = "https://router.project-osrm.org"
+
 VEHICLES = [
     {"vehicle_id": "ambulance-1", "lat": 43.4723, "lon": -80.5449},
     {"vehicle_id": "ambulance-2", "lat": 43.4515, "lon": -80.4925},
@@ -35,29 +45,25 @@ VEHICLES = [
     {"vehicle_id": "ambulance-5", "lat": 43.4553, "lon": -80.5165},
 ]
 
-# Tiny GPS drift for idle vehicles (~5m, simulates real GPS jitter)
 STEP_LAT = 0.00005
 STEP_LON = 0.00007
 
-# Speed: ~60 km/h => ~33.3 m/s => ~66.7 m per 2s tick
-SPEED_M_PER_TICK = 66.7
+SPEED_M_PER_TICK = 66.7  # ~60 km/h at 2s ticks
 TICK_SECONDS = 2
 
 ON_SCENE_DURATION_S = 30
+AT_HOSPITAL_DURATION_S = 20
 RETURNING_DURATION_S = 30
 
-# Thread-safe storage for active routes: vehicle_id -> {"route": deque, "incident_id": str}
 vehicle_routes = {}
 route_lock = threading.Lock()
 
-# Per-vehicle lifecycle state. Keys: status, timer, incident_id
-# status: "available" | "dispatched" | "on_scene" | "returning"
+# status: available | dispatched | on_scene | transporting | at_hospital | returning
 vehicle_states = {}
 state_lock = threading.Lock()
 
 
 def haversine_m(lat1, lon1, lat2, lon2):
-    """Return distance in meters between two lat/lon points."""
     R = 6_371_000
     phi1, phi2 = math.radians(lat1), math.radians(lat2)
     dphi = math.radians(lat2 - lat1)
@@ -67,15 +73,29 @@ def haversine_m(lat1, lon1, lat2, lon2):
 
 
 def interpolate(lat1, lon1, lat2, lon2, fraction):
-    """Linearly interpolate between two points by fraction [0, 1]."""
-    return (
-        lat1 + (lat2 - lat1) * fraction,
-        lon1 + (lon2 - lon1) * fraction,
-    )
+    return (lat1 + (lat2 - lat1) * fraction, lon1 + (lon2 - lon1) * fraction)
+
+
+def fetch_osrm_route(origin_lat, origin_lon, dest_lat, dest_lon):
+    """Fetch a driving route from OSRM. Returns list of [lat, lon] pairs."""
+    try:
+        url = (f"{OSRM_BASE_URL}/route/v1/driving/"
+               f"{origin_lon},{origin_lat};{dest_lon},{dest_lat}"
+               f"?overview=full&geometries=geojson")
+        resp = http_requests.get(url, timeout=10)
+        resp.raise_for_status()
+        data = resp.json()
+        if data.get("code") != "Ok" or not data.get("routes"):
+            print(f"[OSRM] No route returned: {data.get('code')}")
+            return []
+        coords = data["routes"][0]["geometry"]["coordinates"]
+        return [[c[1], c[0]] for c in coords]  # flip [lon,lat] -> [lat,lon]
+    except Exception as e:
+        print(f"[OSRM] Route fetch failed: {e}")
+        return []
 
 
 def dispatch_consumer_thread():
-    """Background thread that listens for vehicle-dispatches and stores routes."""
     bootstrap_servers = os.getenv("KAFKA_BOOTSTRAP_SERVERS", "localhost:9092")
     print(f"[DISPATCH] Connecting to Kafka at {bootstrap_servers} for dispatch events...")
 
@@ -108,19 +128,16 @@ def dispatch_consumer_thread():
                         "incident_id": incident_id,
                         "timer": None,
                     }
-
                 print(f"[DISPATCH] Received route for {vehicle_id}: {len(route)} waypoints")
-
             except Exception as e:
                 print(f"[DISPATCH] Error processing message: {e}")
                 continue
-
     except Exception as e:
         print(f"[DISPATCH] Fatal error: {e}")
 
 
 def advance_along_route(vehicle, route_deque):
-    """Advance a vehicle along its route by SPEED_M_PER_TICK meters. Returns True if still en route."""
+    """Advance a vehicle along its route. Returns True if still en route."""
     budget = SPEED_M_PER_TICK
     current_lat = vehicle["lat"]
     current_lon = vehicle["lon"]
@@ -140,7 +157,6 @@ def advance_along_route(vehicle, route_deque):
 
     vehicle["lat"] = current_lat
     vehicle["lon"] = current_lon
-
     return len(route_deque) > 0
 
 
@@ -157,7 +173,6 @@ def main():
     producer = create_producer()
     print("Producer ready. Sending vehicle location updates every 2 seconds. Press Ctrl+C to stop.")
 
-    # Initialize all vehicles as available
     for v in VEHICLES:
         vehicle_states[v["vehicle_id"]] = {
             "status": "available",
@@ -186,25 +201,11 @@ def main():
                     if entry is not None:
                         still_going = advance_along_route(v, entry["route"])
                         if not still_going:
-                            # Arrived at scene -> enter on_scene phase
                             incident_id = entry["incident_id"]
                             with route_lock:
                                 del vehicle_routes[vid]
-                            with state_lock:
-                                vehicle_states[vid] = {
-                                    "status": "on_scene",
-                                    "incident_id": incident_id,
-                                    "timer": now + ON_SCENE_DURATION_S,
-                                }
-                            print(f"  [{vid}] ARRIVED — entering on_scene for {ON_SCENE_DURATION_S}s")
-                        else:
-                            mode = "ROUTED"
 
-                elif status == "on_scene":
-                    if state["timer"] and now >= state["timer"]:
-                        # On-scene time expired -> publish arrival event and enter returning
-                        incident_id = state["incident_id"]
-                        if incident_id:
+                            # Publish arrival at scene
                             producer.send(
                                 ARRIVAL_TOPIC,
                                 key=vid.encode("utf-8"),
@@ -214,16 +215,109 @@ def main():
                                     "timestamp": datetime.now().isoformat(),
                                 },
                             )
+
+                            with state_lock:
+                                vehicle_states[vid] = {
+                                    "status": "on_scene",
+                                    "incident_id": incident_id,
+                                    "timer": now + ON_SCENE_DURATION_S,
+                                }
+                            print(f"  [{vid}] ARRIVED AT SCENE — on_scene for {ON_SCENE_DURATION_S}s")
+
+                elif status == "on_scene":
+                    if state["timer"] and now >= state["timer"]:
+                        incident_id = state["incident_id"]
+
+                        # Fetch route from current position to Grand River Hospital
+                        hospital_route = fetch_osrm_route(
+                            v["lat"], v["lon"],
+                            GRAND_RIVER_HOSPITAL["lat"], GRAND_RIVER_HOSPITAL["lon"],
+                        )
+
+                        # Publish transporting event
+                        producer.send(
+                            TRANSPORTING_TOPIC,
+                            key=vid.encode("utf-8"),
+                            value={
+                                "vehicle_id": vid,
+                                "incident_id": incident_id,
+                                "route": hospital_route,
+                                "timestamp": datetime.now().isoformat(),
+                            },
+                        )
+
+                        if hospital_route:
+                            with route_lock:
+                                vehicle_routes[vid] = {
+                                    "route": deque(hospital_route),
+                                    "incident_id": incident_id,
+                                }
+
+                        with state_lock:
+                            vehicle_states[vid] = {
+                                "status": "transporting",
+                                "incident_id": incident_id,
+                                "timer": None,
+                            }
+                        print(f"  [{vid}] ON_SCENE complete — TRANSPORTING to hospital ({len(hospital_route)} waypoints)")
+
+                elif status == "transporting":
+                    with route_lock:
+                        entry = vehicle_routes.get(vid)
+                    if entry is not None:
+                        still_going = advance_along_route(v, entry["route"])
+                        if not still_going:
+                            incident_id = entry["incident_id"]
+                            with route_lock:
+                                del vehicle_routes[vid]
+
+                            # Publish at-hospital event
+                            producer.send(
+                                AT_HOSPITAL_TOPIC,
+                                key=vid.encode("utf-8"),
+                                value={
+                                    "vehicle_id": vid,
+                                    "incident_id": incident_id,
+                                    "timestamp": datetime.now().isoformat(),
+                                },
+                            )
+
+                            with state_lock:
+                                vehicle_states[vid] = {
+                                    "status": "at_hospital",
+                                    "incident_id": incident_id,
+                                    "timer": now + AT_HOSPITAL_DURATION_S,
+                                }
+                            print(f"  [{vid}] ARRIVED AT HOSPITAL — at_hospital for {AT_HOSPITAL_DURATION_S}s")
+                    else:
+                        # No route available, fall back to random walk toward hospital
+                        v["lat"] += random.uniform(-STEP_LAT, STEP_LAT)
+                        v["lon"] += random.uniform(-STEP_LON, STEP_LON)
+
+                elif status == "at_hospital":
+                    if state["timer"] and now >= state["timer"]:
+                        incident_id = state["incident_id"]
+
+                        # Publish resolved event
+                        producer.send(
+                            RESOLVED_TOPIC,
+                            key=vid.encode("utf-8"),
+                            value={
+                                "vehicle_id": vid,
+                                "incident_id": incident_id,
+                                "timestamp": datetime.now().isoformat(),
+                            },
+                        )
+
                         with state_lock:
                             vehicle_states[vid] = {
                                 "status": "returning",
                                 "incident_id": None,
                                 "timer": now + RETURNING_DURATION_S,
                             }
-                        print(f"  [{vid}] ON_SCENE complete — returning for {RETURNING_DURATION_S}s")
+                        print(f"  [{vid}] AT_HOSPITAL complete — RESOLVED, returning for {RETURNING_DURATION_S}s")
 
                 elif status == "returning":
-                    # Random walk while returning
                     v["lat"] += random.uniform(-STEP_LAT, STEP_LAT)
                     v["lon"] += random.uniform(-STEP_LON, STEP_LON)
                     if state["timer"] and now >= state["timer"]:

@@ -1,6 +1,6 @@
 import React, { useEffect, useState, useRef, useCallback, useMemo } from 'react';
 import {
-  Phone, Search, MapPin, ChevronDown, ChevronRight,
+  Phone, Search, MapPin, ChevronDown, ChevronRight, ChevronUp,
   Pencil, Check, X, AlertTriangle, BrainCircuit, Plus, PhoneOff
 } from 'lucide-react';
 import Badge from './ui/Badge';
@@ -119,7 +119,22 @@ const CallTaker: React.FC = () => {
   const [showCoordsId, setShowCoordsId] = useState<string | null>(null);
   const [openCodeDropdownId, setOpenCodeDropdownId] = useState<string | null>(null);
   const [conflicts, setConflicts] = useState<Record<string, { field: string; aiValue: string; currentValue: string }>>({});
-  const [lastSuggestionTime, setLastSuggestionTime] = useState<number>(Date.now());
+
+  const [manualOpen, setManualOpen] = useState(false);
+  const [manualForm, setManualForm] = useState({
+    location: '',
+    lat: '43.4643',
+    lon: '-80.5205',
+    incident_code: '',
+    priority: 'Yellow' as CasePriority,
+  });
+  const [manualShowCoords, setManualShowCoords] = useState(false);
+  const [manualEditingLocation, setManualEditingLocation] = useState(false);
+  const [manualGeocodingInProgress, setManualGeocodingInProgress] = useState(false);
+  const [manualSubmitting, setManualSubmitting] = useState(false);
+  const [manualCodeDropdownOpen, setManualCodeDropdownOpen] = useState(false);
+  const [manualCodeSearchQuery, setManualCodeSearchQuery] = useState('');
+  const manualCodeDropdownRef = useRef<HTMLDivElement>(null);
 
   const [now, setNow] = useState(Date.now());
   const transcriptsEndRef = useRef<HTMLDivElement>(null);
@@ -248,7 +263,6 @@ const CallTaker: React.FC = () => {
             return [...prev, s];
           });
           ensureOverride(s);
-          setLastSuggestionTime(Date.now());
         } else if (message.type === 'suggestion_updated') {
           const updated = message.data as Suggestion;
           setSuggestions(prev => prev.map(s => s.id === updated.id ? updated : s));
@@ -377,6 +391,106 @@ const CallTaker: React.FC = () => {
     }
   }, [apiUrl]);
 
+  useEffect(() => {
+    if (!manualCodeDropdownOpen) return;
+    const onMouseDown = (e: MouseEvent) => {
+      if (manualCodeDropdownRef.current && !manualCodeDropdownRef.current.contains(e.target as Node)) {
+        setManualCodeDropdownOpen(false);
+        setManualCodeSearchQuery('');
+      }
+    };
+    const onKeyDown = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') {
+        setManualCodeDropdownOpen(false);
+        setManualCodeSearchQuery('');
+      }
+    };
+    document.addEventListener('mousedown', onMouseDown);
+    document.addEventListener('keydown', onKeyDown);
+    return () => {
+      document.removeEventListener('mousedown', onMouseDown);
+      document.removeEventListener('keydown', onKeyDown);
+    };
+  }, [manualCodeDropdownOpen]);
+
+  const manualFilteredCodes = useMemo(() => {
+    const map: Record<string, AcrCode[]> = {};
+    const query = manualCodeSearchQuery.toLowerCase().trim();
+    acrCodes.forEach(c => {
+      if (query && !c.description.toLowerCase().includes(query) && !c.code.toLowerCase().includes(query) && !c.category.toLowerCase().includes(query)) return;
+      if (!map[c.category]) map[c.category] = [];
+      map[c.category].push(c);
+    });
+    return map;
+  }, [acrCodes, manualCodeSearchQuery]);
+
+  const manualFilteredCodeCount = useMemo(() => {
+    return Object.values(manualFilteredCodes).reduce((sum, codes) => sum + codes.length, 0);
+  }, [manualFilteredCodes]);
+
+  const geocodeManualLocation = useCallback(async (address: string) => {
+    if (!address.trim()) return;
+    setManualGeocodingInProgress(true);
+    try {
+      const res = await fetch(`${apiUrl}/geocode`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ address }),
+      });
+      if (!res.ok) return;
+      const data = await res.json();
+      if (data.found) {
+        setManualForm(prev => ({ ...prev, lat: String(data.lat), lon: String(data.lon) }));
+      }
+    } catch (error) {
+      console.error('Geocoding error:', error);
+    } finally {
+      setManualGeocodingInProgress(false);
+      setManualEditingLocation(false);
+    }
+  }, [apiUrl]);
+
+  const handleManualSubmit = async () => {
+    const lat = parseFloat(manualForm.lat);
+    const lon = parseFloat(manualForm.lon);
+    if (isNaN(lat) || isNaN(lon)) {
+      alert('Please enter valid latitude and longitude values.');
+      return;
+    }
+    setManualSubmitting(true);
+    const selectedCode = acrCodes.find(c => c.code === manualForm.incident_code);
+    const incidentType = selectedCode
+      ? `Code ${selectedCode.code} - ${selectedCode.category}: ${selectedCode.description}`
+      : manualForm.incident_code || 'Manual Incident';
+    try {
+      const res = await fetch(`${apiUrl}/incidents`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          session_id: selectedSessionId,
+          lat,
+          lon,
+          location: manualForm.location || null,
+          type: incidentType,
+          priority: manualForm.priority,
+          source: 'call_taker',
+        }),
+      });
+      if (!res.ok) {
+        const err = await res.json().catch(() => ({}));
+        throw new Error(err.detail || `HTTP ${res.status}`);
+      }
+      setManualForm({ location: '', lat: '43.4643', lon: '-80.5205', incident_code: '', priority: 'Yellow' });
+      setManualOpen(false);
+      setManualShowCoords(false);
+    } catch (error) {
+      console.error('Error creating manual incident:', error);
+      alert(error instanceof Error ? error.message : 'Failed to create incident');
+    } finally {
+      setManualSubmitting(false);
+    }
+  };
+
   const handleAcceptConfirm = async () => {
     if (!confirmDialog) return;
     const { suggestion, override } = confirmDialog;
@@ -468,8 +582,14 @@ const CallTaker: React.FC = () => {
   const SESSION_IDLE_TIMEOUT = 15000;
   const isSessionLive = (session: SessionMeta) => now - session.lastActivityTime < SESSION_IDLE_TIMEOUT;
 
-  const showFailSoft = isConnected && selectedSessionId && activeSuggestions.length === 0 && Date.now() - lastSuggestionTime > 30000;
+  // Newest first for display; call number = position in list (top = Call 1)
+  const sortedSessions = useMemo(
+    () => [...sessions].sort((a, b) => parseUtc(b.startTime).getTime() - parseUtc(a.startTime).getTime()),
+    [sessions],
+  );
+
   const selectedSession = sessions.find(s => s.id === selectedSessionId);
+  const selectedSessionDisplayIndex = selectedSession ? sortedSessions.findIndex(s => s.id === selectedSession.id) + 1 : null;
 
   const highlightTranscript = (text: string): React.ReactNode => {
     if (hoveredEvidence.size === 0) return text;
@@ -517,11 +637,12 @@ const CallTaker: React.FC = () => {
           <span className="ct-call-count">{sessions.length}</span>
         </div>
         <div className="ct-sidebar-list">
-          {sessions.length === 0 ? (
+          {sortedSessions.length === 0 ? (
             <EmptyState title="No active calls" description="Waiting for incoming calls..." />
           ) : (
-            sessions.map(session => {
+            sortedSessions.map((session, idx) => {
               const live = isSessionLive(session);
+              const callNumber = idx + 1;
               return (
                 <button
                   key={session.id}
@@ -529,7 +650,7 @@ const CallTaker: React.FC = () => {
                   onClick={() => setSelectedSessionId(session.id)}
                 >
                   <div className="ct-session-info">
-                    <span className="ct-session-label">Call #{session.index}</span>
+                    <span className="ct-session-label">Call #{callNumber}</span>
                     <span className="ct-session-time">
                       {parseUtc(session.startTime).toLocaleTimeString('en-US', EST_OPTS)}
                     </span>
@@ -550,8 +671,8 @@ const CallTaker: React.FC = () => {
       <div className="ct-main">
         <div className="ct-main-header">
           <div className="ct-main-title">
-            {selectedSession
-              ? <>Live Transcript &mdash; Call #{selectedSession.index}</>
+            {selectedSession && selectedSessionDisplayIndex != null
+              ? <>Live Transcript &mdash; Call #{selectedSessionDisplayIndex}</>
               : 'Select a Call'}
           </div>
         </div>
@@ -588,21 +709,189 @@ const CallTaker: React.FC = () => {
           )}
         </div>
         <div className="ct-suggestions-list">
-          {activeSuggestions.length === 0 && !showFailSoft && (
-            <EmptyState title="Analyzing conversation..." description="AI suggestions will appear as patterns are detected." />
-          )}
+          {/* Manual Incident Entry — always available */}
+          <div className={`ct-manual-card ${manualOpen ? 'ct-manual-card-open' : ''}`}>
+            <button
+              className="ct-manual-toggle"
+              onClick={() => setManualOpen(prev => !prev)}
+            >
+              <Plus size={14} className={`ct-manual-toggle-icon ${manualOpen ? 'ct-manual-toggle-icon-open' : ''}`} />
+              <span>Manual Incident Entry</span>
+              {manualOpen ? <ChevronUp size={14} /> : <ChevronDown size={14} />}
+            </button>
+            {manualOpen && (
+              <div className="ct-manual-body">
+                <div className="ct-card-fields">
+                  {/* Location */}
+                  <div className="ct-field">
+                    <div className="ct-field-label">
+                      <MapPin size={11} />
+                      <span>Location</span>
+                    </div>
+                    {manualEditingLocation ? (
+                      <div className="ct-field-edit-row">
+                        <input
+                          type="text"
+                          className="ct-input"
+                          value={manualForm.location}
+                          onChange={e => setManualForm(prev => ({ ...prev, location: e.target.value }))}
+                          onBlur={e => geocodeManualLocation(e.target.value)}
+                          autoFocus
+                          placeholder="e.g. 234 Columbia St"
+                        />
+                        <button className="ct-icon-btn" onClick={() => setManualEditingLocation(false)}><Check size={13} /></button>
+                      </div>
+                    ) : (
+                      <div className="ct-location-display">
+                        <span className="ct-location-address">
+                          {manualForm.location || <span className="ct-placeholder">No location set</span>}
+                        </span>
+                        <button className="ct-icon-btn" onClick={() => setManualEditingLocation(true)}>
+                          <Pencil size={12} />
+                        </button>
+                        {manualGeocodingInProgress && <span className="ct-spinner" />}
+                      </div>
+                    )}
+                    <button className="ct-coords-toggle" onClick={() => setManualShowCoords(prev => !prev)}>
+                      {manualShowCoords ? <ChevronDown size={11} /> : <ChevronRight size={11} />}
+                      <span>{manualForm.lat}, {manualForm.lon}</span>
+                    </button>
+                    {manualShowCoords && (
+                      <div className="ct-coords-edit">
+                        <div className="ct-field-half">
+                          <label className="ct-mini-label">Lat</label>
+                          <input type="text" className="ct-input ct-input-sm" value={manualForm.lat} onChange={e => setManualForm(prev => ({ ...prev, lat: e.target.value }))} />
+                        </div>
+                        <div className="ct-field-half">
+                          <label className="ct-mini-label">Lon</label>
+                          <input type="text" className="ct-input ct-input-sm" value={manualForm.lon} onChange={e => setManualForm(prev => ({ ...prev, lon: e.target.value }))} />
+                        </div>
+                      </div>
+                    )}
+                  </div>
 
-          {showFailSoft && (
-            <div className="ct-failsoft-card">
-              <div className="ct-failsoft-header">
-                <AlertTriangle size={14} />
-                <span>No AI suggestions available</span>
+                  {/* Incident Code */}
+                  <div className="ct-field">
+                    <div className="ct-field-label"><span>Incident Code</span></div>
+                    <div
+                      className={`ct-code-combobox ${manualCodeDropdownOpen ? 'ct-code-combobox-open' : ''}`}
+                      ref={manualCodeDropdownOpen ? manualCodeDropdownRef : undefined}
+                    >
+                      <button
+                        type="button"
+                        className={`ct-code-trigger ${!manualForm.incident_code ? 'ct-code-trigger-placeholder' : ''}`}
+                        onClick={() => setManualCodeDropdownOpen(prev => !prev)}
+                        aria-expanded={manualCodeDropdownOpen}
+                        aria-haspopup="listbox"
+                      >
+                        <span className="ct-code-trigger-text">
+                          {manualForm.incident_code
+                            ? (() => {
+                                const sel = acrCodes.find(c => c.code === manualForm.incident_code);
+                                return sel ? `${sel.code} — ${sel.description}` : manualForm.incident_code;
+                              })()
+                            : 'Search incident code...'}
+                        </span>
+                        <ChevronDown size={14} className="ct-code-trigger-icon" aria-hidden />
+                      </button>
+                      {manualCodeDropdownOpen && (
+                        <div className="ct-code-dropdown" role="listbox">
+                          <div className="ct-code-search">
+                            <Search size={12} className="ct-code-search-icon" aria-hidden />
+                            <input
+                              type="text"
+                              className="ct-input ct-code-search-input"
+                              placeholder="Search by code or description..."
+                              value={manualCodeSearchQuery}
+                              onChange={e => setManualCodeSearchQuery(e.target.value)}
+                              autoFocus
+                              aria-label="Filter incident codes"
+                            />
+                            {manualCodeSearchQuery && (
+                              <span className="ct-code-search-count">{manualFilteredCodeCount} results</span>
+                            )}
+                          </div>
+                          <div className="ct-code-list">
+                            {manualForm.incident_code && (
+                              <button
+                                type="button"
+                                className="ct-code-option ct-code-option-clear"
+                                onClick={() => {
+                                  setManualForm(prev => ({ ...prev, incident_code: '' }));
+                                  setManualCodeDropdownOpen(false);
+                                  setManualCodeSearchQuery('');
+                                }}
+                              >
+                                Clear selection
+                              </button>
+                            )}
+                            {Object.entries(manualFilteredCodes).map(([category, codes]) => (
+                              <div key={category} className="ct-code-group">
+                                <div className="ct-code-group-label">{category}</div>
+                                {codes.map(c => (
+                                  <button
+                                    key={c.code}
+                                    type="button"
+                                    role="option"
+                                    className={`ct-code-option ${manualForm.incident_code === c.code ? 'ct-code-option-selected' : ''}`}
+                                    onClick={() => {
+                                      setManualForm(prev => ({ ...prev, incident_code: c.code, priority: c.default_priority as CasePriority }));
+                                      setManualCodeDropdownOpen(false);
+                                      setManualCodeSearchQuery('');
+                                    }}
+                                  >
+                                    <span className="ct-code-option-code">{c.code}</span>
+                                    <span className="ct-code-option-desc">{c.description}</span>
+                                  </button>
+                                ))}
+                              </div>
+                            ))}
+                            {manualFilteredCodeCount === 0 && !manualForm.incident_code && (
+                              <div className="ct-code-empty">No codes match your search.</div>
+                            )}
+                          </div>
+                        </div>
+                      )}
+                    </div>
+                  </div>
+
+                  {/* Priority */}
+                  <div className="ct-field">
+                    <div className="ct-field-label"><span>Priority</span></div>
+                    <div className="ct-priority-select">
+                      <span className="ct-priority-dot" style={{ backgroundColor: PRIORITY_COLORS[manualForm.priority] }} />
+                      <select
+                        className="ct-select"
+                        value={manualForm.priority}
+                        onChange={e => setManualForm(prev => ({ ...prev, priority: e.target.value as CasePriority }))}
+                      >
+                        {PRIORITIES.map(p => <option key={p} value={p}>{p}</option>)}
+                      </select>
+                    </div>
+                  </div>
+                </div>
+
+                <div className="ct-card-actions">
+                  <Button
+                    variant="success"
+                    size="sm"
+                    icon={<Check size={13} />}
+                    onClick={handleManualSubmit}
+                    disabled={manualSubmitting}
+                    loading={manualSubmitting}
+                  >
+                    Create Incident
+                  </Button>
+                  <Button variant="ghost" size="sm" icon={<X size={13} />} onClick={() => setManualOpen(false)}>
+                    Cancel
+                  </Button>
+                </div>
               </div>
-              <p className="ct-failsoft-desc">Create an incident manually if needed.</p>
-              <Button variant="secondary" size="sm" icon={<Plus size={13} />} fullWidth>
-                Manual Incident Entry
-              </Button>
-            </div>
+            )}
+          </div>
+
+          {activeSuggestions.length === 0 && (
+            <EmptyState title="Analyzing conversation..." description="AI suggestions will appear as patterns are detected." />
           )}
 
           {activeSuggestions.map(s => {

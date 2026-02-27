@@ -1,5 +1,14 @@
 export type CasePriority = "Purple" | "Red" | "Orange" | "Yellow" | "Green";
 
+export type CaseStatus =
+  | "open"
+  | "dispatched"
+  | "en_route"
+  | "on_scene"
+  | "transporting"
+  | "at_hospital"
+  | "resolved";
+
 export interface CaseInfo {
   id: string;
   session_id?: string;
@@ -9,7 +18,9 @@ export interface CaseInfo {
   type: string;
   priority: CasePriority;
   weight: number;
-  status: "open" | "in_progress" | "resolved";
+  status: CaseStatus;
+  source?: string;
+  assigned_vehicle_id?: string;
   reported_at: string;
   updated_at: string;
 }

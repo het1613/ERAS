@@ -72,7 +72,7 @@ MOCK_VEHICLES = [
         id="ambulance-4",
         lat=43.4583,
         lon=-80.5025,
-        status="dispatched",
+        status="available",
         vehicle_type="ambulance",
     ),
     Vehicle(
@@ -84,10 +84,9 @@ MOCK_VEHICLES = [
     ),
 ]
 
-# Mock hospital data (lat, lng)
+# Grand River Hospital (835 King St W, Kitchener, ON N2G 1G3)
 MOCK_HOSPITALS = np.array([
-    [43.5313, -80.3458],  # Hospital 0
-    [43.6537, -80.7036]   # Hospital 1
+    [43.455280, -80.505836],
 ])
 
 # Vehicle location tracker (updates positions from Kafka)
@@ -118,15 +117,15 @@ def fetch_route_from_osrm(origin_lat: float, origin_lon: float, dest_lat: float,
         return []
 
 
-def arrival_consumer_thread():
-    """Background thread that consumes vehicle-arrivals to reset vehicle status."""
+def lifecycle_consumer_thread():
+    """Background thread that consumes vehicle lifecycle events to update vehicle status."""
     try:
         consumer = create_consumer(
-            topics=["vehicle-arrivals"],
-            group_id="geospatial-arrival-consumer",
+            topics=["vehicle-arrivals", "vehicle-transporting", "vehicle-at-hospital", "vehicle-resolved"],
+            group_id="geospatial-lifecycle-consumer",
             auto_offset_reset="latest",
         )
-        logger.info("Arrival consumer started, listening for vehicle-arrivals...")
+        logger.info("Lifecycle consumer started, listening for vehicle lifecycle events...")
         for message in consumer:
             try:
                 data = message.value
@@ -134,13 +133,26 @@ def arrival_consumer_thread():
                 if not vehicle_id:
                     continue
                 vehicle = next((v for v in MOCK_VEHICLES if v.id == vehicle_id), None)
-                if vehicle and vehicle.status == "dispatched":
+                if not vehicle:
+                    continue
+
+                topic = message.topic
+                if topic == "vehicle-arrivals":
+                    vehicle.status = "dispatched"  # still occupied
+                    logger.info(f"Vehicle {vehicle_id} arrived at scene (on_scene)")
+                elif topic == "vehicle-transporting":
+                    vehicle.status = "dispatched"
+                    logger.info(f"Vehicle {vehicle_id} transporting to hospital")
+                elif topic == "vehicle-at-hospital":
+                    vehicle.status = "dispatched"
+                    logger.info(f"Vehicle {vehicle_id} at hospital")
+                elif topic == "vehicle-resolved":
                     vehicle.status = "available"
-                    logger.info(f"Vehicle {vehicle_id} arrived, status reset to available")
+                    logger.info(f"Vehicle {vehicle_id} resolved, status reset to available")
             except Exception as e:
-                logger.error(f"Error processing arrival message: {e}")
+                logger.error(f"Error processing lifecycle message: {e}")
     except Exception as e:
-        logger.error(f"Fatal error in arrival consumer: {e}")
+        logger.error(f"Fatal error in lifecycle consumer: {e}")
 
 
 @app.on_event("startup")
@@ -148,7 +160,7 @@ async def startup_event():
     global kafka_producer
     kafka_producer = create_producer()
     vehicle_tracker.start_consumer()
-    threading.Thread(target=arrival_consumer_thread, daemon=True).start()
+    threading.Thread(target=lifecycle_consumer_thread, daemon=True).start()
 
 
 # In-memory storage for vehicle assignments
@@ -160,13 +172,18 @@ class FindBestRequest(BaseModel):
     exclude_vehicles: list[str] = []
 
 
+ACTIVE_INCIDENT_STATUSES = ('open', 'dispatched', 'en_route', 'on_scene', 'transporting', 'at_hospital')
+
+
 def get_open_incidents():
-    """Fetch all open/in_progress incidents from DB."""
+    """Fetch all active (non-resolved) incidents from DB."""
     conn = get_connection()
     try:
         with conn.cursor() as cur:
+            placeholders = ','.join(['%s'] * len(ACTIVE_INCIDENT_STATUSES))
             cur.execute(
-                "SELECT id, lat, lon, weight, status FROM incidents WHERE status IN ('open', 'in_progress')"
+                f"SELECT id, lat, lon, weight, status FROM incidents WHERE status IN ({placeholders})",
+                ACTIVE_INCIDENT_STATUSES,
             )
             rows = cur.fetchall()
             return [{"id": r[0], "lat": float(r[1]), "lon": float(r[2]), "weight": r[3], "status": r[4]} for r in rows]
@@ -407,9 +424,7 @@ async def accept_assignment(suggestion_id: str):
         vehicle.status = "dispatched"
         logger.info(f"Accepted assignment for suggestion {suggestion_id}: vehicle {vehicle.id} dispatched")
 
-    # Update incident status in DB
-    if incident_id:
-        update_incident_status(incident_id, "in_progress")
+    # Dashboard-api transitions incident status via the vehicle-dispatches Kafka event
 
     # Use pre-fetched route if available, otherwise fetch from OSRM
     if vehicle and incident_id:

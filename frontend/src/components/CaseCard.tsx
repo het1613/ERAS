@@ -1,5 +1,5 @@
 import { MapPin, Clock, Truck } from "lucide-react";
-import { CaseInfo, PRIORITY_COLORS, PRIORITY_BGS, CasePriority } from "./types";
+import { CaseInfo, CaseStatus, PRIORITY_COLORS, PRIORITY_BGS, CasePriority } from "./types";
 import Badge from "./ui/Badge";
 import Button from "./ui/Button";
 import "./CasePanel.css";
@@ -10,7 +10,9 @@ export type DispatchPhase =
 	| "dispatched"
 	| "en_route"
 	| "on_scene"
-	| "arrived"
+	| "transporting"
+	| "at_hospital"
+	| "resolved"
 	| null;
 
 export interface DispatchInfo {
@@ -23,13 +25,29 @@ const DISPATCH_PHASES: { key: string; label: string }[] = [
 	{ key: "dispatched", label: "Dispatched" },
 	{ key: "en_route", label: "En Route" },
 	{ key: "on_scene", label: "On Scene" },
-	{ key: "arrived", label: "Resolved" },
+	{ key: "transporting", label: "Transporting" },
+	{ key: "at_hospital", label: "At Hospital" },
+	{ key: "resolved", label: "Resolved" },
 ];
 
 const STATUS_LABELS: Record<string, string> = {
 	open: "Open",
-	in_progress: "In Progress",
+	dispatched: "Dispatched",
+	en_route: "En Route",
+	on_scene: "On Scene",
+	transporting: "Transporting",
+	at_hospital: "At Hospital",
 	resolved: "Resolved",
+};
+
+const STATUS_VARIANTS: Record<string, "info" | "warning" | "neutral" | "success"> = {
+	open: "info",
+	dispatched: "warning",
+	en_route: "warning",
+	on_scene: "warning",
+	transporting: "warning",
+	at_hospital: "warning",
+	resolved: "neutral",
 };
 
 function formatVehicleLabel(vehicleId: string): string {
@@ -46,11 +64,17 @@ function timeAgo(isoString: string | undefined): string {
 	return `${hrs}h ${mins % 60}m ago`;
 }
 
-function getPhaseIndex(phase: DispatchPhase | undefined, status: string): number {
-	if (status === "resolved") return 4;
-	if (!phase) return 0;
-	const map: Record<string, number> = { finding: 0, suggested: 0, dispatched: 1, en_route: 2, on_scene: 3, arrived: 4 };
-	return map[phase] ?? 0;
+const PHASE_ORDER: Record<string, number> = {
+	open: 0, finding: 0, suggested: 0,
+	dispatched: 1, en_route: 2, on_scene: 3,
+	transporting: 4, at_hospital: 5, resolved: 6,
+};
+
+function getPhaseIndex(phase: DispatchPhase | undefined, status: CaseStatus): number {
+	if (status === "resolved") return 6;
+	if (phase && PHASE_ORDER[phase] !== undefined) return PHASE_ORDER[phase];
+	if (PHASE_ORDER[status] !== undefined) return PHASE_ORDER[status];
+	return 0;
 }
 
 interface CaseCardProps {
@@ -65,6 +89,7 @@ export default function CaseCard({ data, onDispatch, dispatchLoading, dispatchIn
 	const priority = data.priority as CasePriority;
 	const phaseIdx = getPhaseIndex(phase, data.status);
 	const showProgress = data.status !== "open" || phase;
+	const vehicleId = dispatchInfo?.vehicleId || data.assigned_vehicle_id;
 
 	return (
 		<div className="cc-card" style={{ borderLeftColor: PRIORITY_COLORS[priority] }}>
@@ -82,7 +107,7 @@ export default function CaseCard({ data, onDispatch, dispatchLoading, dispatchIn
 						{priority}
 					</Badge>
 					<Badge
-						variant={data.status === "open" ? "info" : data.status === "in_progress" ? "warning" : "neutral"}
+						variant={STATUS_VARIANTS[data.status] || "neutral"}
 						size="sm"
 					>
 						{STATUS_LABELS[data.status] || data.status}
@@ -114,11 +139,22 @@ export default function CaseCard({ data, onDispatch, dispatchLoading, dispatchIn
 				</div>
 			)}
 
+			{/* Progress Labels */}
+			{showProgress && (
+				<div className="cc-progress-labels">
+					{DISPATCH_PHASES.map((p, i) => (
+						<span key={p.key} className={`cc-progress-label ${i === phaseIdx ? "current" : ""}`}>
+							{p.label}
+						</span>
+					))}
+				</div>
+			)}
+
 			{/* Vehicle Assignment */}
-			{dispatchInfo?.vehicleId && (
+			{vehicleId && (
 				<div className="cc-vehicle">
 					<Truck size={12} />
-					<span>{formatVehicleLabel(dispatchInfo.vehicleId)}</span>
+					<span>{formatVehicleLabel(vehicleId)}</span>
 				</div>
 			)}
 

@@ -86,12 +86,39 @@ class VehicleArrivalEvent(BaseModel):
     timestamp: datetime
 
 
+class VehicleTransportingEvent(BaseModel):
+    """Published when an ambulance leaves the scene heading to hospital."""
+    vehicle_id: str
+    incident_id: str
+    route: List[List[float]]
+    timestamp: datetime
+
+
+class VehicleAtHospitalEvent(BaseModel):
+    """Published when an ambulance arrives at the hospital."""
+    vehicle_id: str
+    incident_id: str
+    timestamp: datetime
+
+
+INCIDENT_STATUSES = [
+    "open", "dispatched", "en_route", "on_scene",
+    "transporting", "at_hospital", "resolved",
+]
+
 PRIORITY_WEIGHT_MAP = {
     "Purple": 16,
     "Red": 8,
     "Orange": 4,
     "Yellow": 2,
     "Green": 1,
+}
+
+GRAND_RIVER_HOSPITAL = {
+    "lat": 43.455280,
+    "lon": -80.505836,
+    "name": "Grand River Hospital",
+    "address": "835 King St W, Kitchener, ON N2G 1G3",
 }
 
 
@@ -106,6 +133,8 @@ class Incident(BaseModel):
     priority: str = "Yellow"
     weight: int = 0
     status: str = "open"
+    source: str = "manual"
+    assigned_vehicle_id: Optional[str] = None
     reported_at: Optional[datetime] = None
     updated_at: Optional[datetime] = None
 

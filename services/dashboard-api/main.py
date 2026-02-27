@@ -1,8 +1,13 @@
 """
 Dashboard API Service - Aggregated API and WebSocket gateway for frontend.
+
+All sessions, transcripts, suggestions, incidents, and dispatch routes are
+persisted in PostgreSQL. Only ephemeral vehicle statuses remain in-memory
+(they rebuild from live Kafka location messages on restart).
 """
 
 import os
+import json
 import logging
 import sys
 import asyncio
@@ -10,7 +15,6 @@ import threading
 import uuid
 from datetime import datetime, timezone
 from typing import Dict, List, Optional
-from collections import defaultdict
 
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
@@ -22,11 +26,9 @@ from shared.types import Transcript, Suggestion, VehicleLocation, PRIORITY_WEIGH
 from shared.db import get_connection
 from shared.acr_codes import get_acr_codes_for_api
 
-# Add parent directory to path to access shared module
 parent_dir = os.path.abspath(os.path.join(os.path.dirname(__file__), '../../'))
 sys.path.insert(0, parent_dir)
 
-# Configure logging
 logging.basicConfig(
     level=logging.INFO,
     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
@@ -35,7 +37,6 @@ logger = logging.getLogger(__name__)
 
 app = FastAPI(title="Dashboard API Service", version="0.1.0")
 
-# Enable CORS for frontend communication
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
@@ -44,24 +45,10 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# In-memory storage for sessions, transcripts, and suggestions
-# TODO: Store in PostgreSQL
-sessions: Dict[str, Dict] = {}
-transcripts_by_session: Dict[str, List[Transcript]] = defaultdict(list)
-suggestions_by_session: Dict[str, List[Suggestion]] = defaultdict(list)
-suggestions_by_id: Dict[str, Suggestion] = {}  # suggestion.id -> Suggestion for O(1) lookup
-
-# Active dispatch routes: vehicle_id -> {incident_id, route: [{lat, lng}, ...]}
-active_routes: Dict[str, Dict] = {}
-
-# Vehicle status tracking: vehicle_id -> status string
-# Updated on dispatch ("dispatched") and arrival ("available")
+# Ephemeral in-memory state (rebuilds from Kafka on restart)
 vehicle_statuses: Dict[str, str] = {}
 
-# Per-incident dispatch state: incident_id -> { declined_vehicles: [str], suggestion_id: str | None }
-incident_dispatch_state: Dict[str, Dict] = {}
 
-# WebSocket connection manager
 class ConnectionManager:
     def __init__(self):
         self.active_connections: List[WebSocket] = []
@@ -76,7 +63,6 @@ class ConnectionManager:
         logger.info(f"WebSocket client disconnected. Total connections: {len(self.active_connections)}")
 
     async def broadcast(self, message: dict):
-        """Broadcast message to all connected WebSocket clients."""
         disconnected = []
         for connection in self.active_connections:
             try:
@@ -84,21 +70,98 @@ class ConnectionManager:
             except Exception as e:
                 logger.error(f"Error sending to WebSocket client: {e}")
                 disconnected.append(connection)
-
-        # Remove disconnected clients
         for conn in disconnected:
             self.disconnect(conn)
 
+
 manager = ConnectionManager()
 
-# Service URLs (from docker-compose network)
 GEOSPATIAL_DISPATCH_URL = os.getenv("GEOSPATIAL_DISPATCH_URL", "http://geospatial-dispatch:8002")
 
-# Store event loop reference for use in Kafka consumer thread
 event_loop = None
 
 
-# --- Incident request models ---
+# ---------------------------------------------------------------------------
+# DB helpers
+# ---------------------------------------------------------------------------
+
+INCIDENT_SELECT = """SELECT id, session_id, lat, lon, location, type, priority, weight,
+                            status, source, assigned_vehicle_id, reported_at, updated_at
+                     FROM incidents"""
+
+
+def _row_to_incident_dict(row) -> dict:
+    return {
+        "id": row[0],
+        "session_id": row[1],
+        "lat": float(row[2]),
+        "lon": float(row[3]),
+        "location": row[4],
+        "type": row[5],
+        "priority": row[6],
+        "weight": row[7],
+        "status": row[8],
+        "source": row[9],
+        "assigned_vehicle_id": row[10],
+        "reported_at": row[11].isoformat() if row[11] else None,
+        "updated_at": row[12].isoformat() if row[12] else None,
+    }
+
+
+def _log_incident_event(conn, incident_id: str, event_type: str,
+                         old_status: str = None, new_status: str = None,
+                         vehicle_id: str = None, metadata: dict = None):
+    with conn.cursor() as cur:
+        cur.execute(
+            """INSERT INTO incident_events
+               (incident_id, event_type, old_status, new_status, vehicle_id, timestamp, metadata)
+               VALUES (%s, %s, %s, %s, %s, CURRENT_TIMESTAMP, %s)""",
+            (incident_id, event_type, old_status, new_status, vehicle_id,
+             json.dumps(metadata) if metadata else None),
+        )
+
+
+def _row_to_suggestion_dict(row) -> dict:
+    return {
+        "id": row[0],
+        "session_id": row[1],
+        "suggestion_type": row[2],
+        "value": row[3],
+        "status": row[4],
+        "timestamp": row[5].isoformat() if row[5] else None,
+        "incident_code": row[6],
+        "incident_code_description": row[7],
+        "incident_code_category": row[8],
+        "priority": row[9],
+        "confidence": float(row[10]) if row[10] is not None else None,
+        "matched_evidence": row[11],
+        "extracted_location": row[12],
+        "extracted_lat": float(row[13]) if row[13] is not None else None,
+        "extracted_lon": float(row[14]) if row[14] is not None else None,
+        "location_confidence": float(row[15]) if row[15] is not None else None,
+    }
+
+
+SUGGESTION_SELECT = """SELECT id, session_id, suggestion_type, value, status, timestamp,
+                              incident_code, incident_code_description, incident_code_category,
+                              priority, confidence, matched_evidence,
+                              extracted_location, extracted_lat, extracted_lon, location_confidence
+                       FROM suggestions"""
+
+
+def _broadcast_incident_update_from_thread(incident_dict: dict):
+    """Schedule an incident_updated broadcast from a Kafka consumer thread."""
+    global event_loop
+    if event_loop and event_loop.is_running():
+        asyncio.run_coroutine_threadsafe(
+            manager.broadcast({"type": "incident_updated", "data": incident_dict}),
+            event_loop,
+        )
+
+
+# ---------------------------------------------------------------------------
+# Request models
+# ---------------------------------------------------------------------------
 
 class CreateIncidentRequest(BaseModel):
     session_id: Optional[str] = None
@@ -108,6 +171,8 @@ class CreateIncidentRequest(BaseModel):
     type: Optional[str] = None
     priority: str = "Yellow"
     weight: Optional[int] = None
+    source: str = "manual"
+
 
 class UpdateIncidentRequest(BaseModel):
     status: Optional[str] = None
@@ -127,45 +192,49 @@ class AcceptSuggestionRequest(BaseModel):
     location: Optional[str] = None
 
 
-# --- Incident helper functions ---
+class FindBestRequest(BaseModel):
+    incident_id: str
+    exclude_vehicles: list[str] = []
 
-def _row_to_incident_dict(row) -> dict:
-    """Convert a DB row tuple to an incident dict."""
-    return {
-        "id": row[0],
-        "session_id": row[1],
-        "lat": float(row[2]),
-        "lon": float(row[3]),
-        "location": row[4],
-        "type": row[5],
-        "priority": row[6],
-        "weight": row[7],
-        "status": row[8],
-        "reported_at": row[9].isoformat() if row[9] else None,
-        "updated_at": row[10].isoformat() if row[10] else None,
-    }
 
-INCIDENT_SELECT = "SELECT id, session_id, lat, lon, location, type, priority, weight, status, reported_at, updated_at FROM incidents"
+class DeclineAndReassignRequest(BaseModel):
+    incident_id: str
+    declined_vehicle_id: str
 
+
+class GeocodeRequest(BaseModel):
+    address: str
+
+
+# ---------------------------------------------------------------------------
+# Health
+# ---------------------------------------------------------------------------
 
 @app.get("/health")
 async def health_check():
-    """Health check endpoint."""
     return {"status": "healthy", "service": "dashboard-api"}
 
 
-# --- Incident CRUD endpoints ---
+# ---------------------------------------------------------------------------
+# Incident CRUD
+# ---------------------------------------------------------------------------
 
 @app.get("/incidents")
-async def list_incidents(status: Optional[str] = None):
-    """List all incidents, optionally filtered by status."""
+async def list_incidents(status: Optional[str] = None, source: Optional[str] = None):
+    """List incidents, optionally filtered by status and/or source."""
     conn = get_connection()
     try:
         with conn.cursor() as cur:
+            wheres: list[str] = []
+            params: list = []
             if status:
-                cur.execute(f"{INCIDENT_SELECT} WHERE status = %s ORDER BY reported_at DESC", (status,))
-            else:
-                cur.execute(f"{INCIDENT_SELECT} ORDER BY reported_at DESC")
+                wheres.append("status = %s")
+                params.append(status)
+            if source:
+                wheres.append("source = %s")
+                params.append(source)
+            where_clause = (" WHERE " + " AND ".join(wheres)) if wheres else ""
+            cur.execute(f"{INCIDENT_SELECT}{where_clause} ORDER BY reported_at DESC", params)
             rows = cur.fetchall()
             return {"incidents": [_row_to_incident_dict(r) for r in rows]}
     finally:
@@ -174,7 +243,6 @@ async def list_incidents(status: Optional[str] = None):
 
 @app.get("/incidents/{incident_id}")
 async def get_incident(incident_id: str):
-    """Get a single incident by ID."""
     conn = get_connection()
     try:
         with conn.cursor() as cur:
@@ -189,7 +257,8 @@ async def get_incident(incident_id: str):
 
 @app.post("/incidents")
 async def create_incident(req: CreateIncidentRequest):
-    """Create a new incident, write to DB, broadcast via WebSocket."""
+    """Create a new incident. Source defaults to 'manual'; use 'call_taker' for manual entries from the call-taker UI (also triggers auto-dispatch)."""
+    source = req.source if req.source in ("manual", "call_taker") else "manual"
     incident_id = str(uuid.uuid4())
     weight = req.weight if req.weight is not None else PRIORITY_WEIGHT_MAP.get(req.priority, 2)
     now = datetime.now(timezone.utc)
@@ -197,44 +266,47 @@ async def create_incident(req: CreateIncidentRequest):
     conn = get_connection()
     try:
         with conn.cursor() as cur:
+            if source == "call_taker" and req.session_id:
+                cur.execute(
+                    "INSERT INTO sessions (id, created_at, status) VALUES (%s, %s, 'active') ON CONFLICT (id) DO NOTHING",
+                    (req.session_id, now),
+                )
             cur.execute(
-                """INSERT INTO incidents (id, session_id, lat, lon, location, type, priority, weight, status, reported_at, updated_at)
-                   VALUES (%s, %s, %s, %s, %s, %s, %s, %s, 'open', %s, %s)""",
-                (incident_id, req.session_id, req.lat, req.lon, req.location, req.type, req.priority, weight, now, now)
+                """INSERT INTO incidents
+                   (id, session_id, lat, lon, location, type, priority, weight, status, source, reported_at, updated_at)
+                   VALUES (%s, %s, %s, %s, %s, %s, %s, %s, 'open', %s, %s, %s)""",
+                (incident_id, req.session_id, req.lat, req.lon,
+                 req.location, req.type, req.priority, weight, source, now, now),
             )
+            _log_incident_event(conn, incident_id, "created", None, "open")
         conn.commit()
 
-        # Read back the full row
         with conn.cursor() as cur:
             cur.execute(f"{INCIDENT_SELECT} WHERE id = %s", (incident_id,))
-            row = cur.fetchone()
-            incident_dict = _row_to_incident_dict(row)
+            incident_dict = _row_to_incident_dict(cur.fetchone())
     finally:
         conn.close()
 
-    # Broadcast to WebSocket clients
-    await manager.broadcast({
-        "type": "incident_created",
-        "data": incident_dict
-    })
+    await manager.broadcast({"type": "incident_created", "data": incident_dict})
+    logger.info(f"Created incident {incident_id} (source={source})")
 
-    logger.info(f"Created incident {incident_id}")
-    return incident_dict
+    dispatch_data = None
+    if source == "call_taker":
+        dispatch_data = await _find_best_and_broadcast(incident_id)
+
+    return {"incident": incident_dict, "dispatch_suggestion": dispatch_data}
 
 
 @app.patch("/incidents/{incident_id}")
 async def update_incident(incident_id: str, req: UpdateIncidentRequest):
-    """Update an incident's fields, write to DB, broadcast via WebSocket."""
-    # Build dynamic SET clause from provided fields
-    updates = []
-    params = []
+    updates: list[str] = []
+    params: list = []
     if req.status is not None:
         updates.append("status = %s")
         params.append(req.status)
     if req.priority is not None:
         updates.append("priority = %s")
         params.append(req.priority)
-        # Auto-update weight if priority changes and weight not explicitly set
         if req.weight is None:
             updates.append("weight = %s")
             params.append(PRIORITY_WEIGHT_MAP.get(req.priority, 2))
@@ -256,113 +328,106 @@ async def update_incident(incident_id: str, req: UpdateIncidentRequest):
 
     conn = get_connection()
     try:
+        old_status = None
+        if req.status is not None:
+            with conn.cursor() as cur:
+                cur.execute("SELECT status FROM incidents WHERE id = %s", (incident_id,))
+                row = cur.fetchone()
+                if row:
+                    old_status = row[0]
+
         with conn.cursor() as cur:
-            cur.execute(
-                f"UPDATE incidents SET {', '.join(updates)} WHERE id = %s",
-                params
-            )
+            cur.execute(f"UPDATE incidents SET {', '.join(updates)} WHERE id = %s", params)
             if cur.rowcount == 0:
                 raise HTTPException(status_code=404, detail="Incident not found")
+
+        if req.status is not None and old_status:
+            _log_incident_event(conn, incident_id, "status_change", old_status, req.status)
+
         conn.commit()
 
-        # Read back the updated row
         with conn.cursor() as cur:
             cur.execute(f"{INCIDENT_SELECT} WHERE id = %s", (incident_id,))
-            row = cur.fetchone()
-            incident_dict = _row_to_incident_dict(row)
+            incident_dict = _row_to_incident_dict(cur.fetchone())
     finally:
         conn.close()
 
-    # Broadcast to WebSocket clients
-    await manager.broadcast({
-        "type": "incident_updated",
-        "data": incident_dict
-    })
-
+    await manager.broadcast({"type": "incident_updated", "data": incident_dict})
     logger.info(f"Updated incident {incident_id}")
     return incident_dict
 
 
-# --- Existing endpoints ---
+# ---------------------------------------------------------------------------
+# Sessions / Transcripts / Suggestions (DB-backed)
+# ---------------------------------------------------------------------------
 
 @app.get("/sessions")
 async def get_sessions():
-    """
-    Get all active sessions.
-
-    Returns:
-        List of session summaries
-    """
-    session_list = []
-    for session_id, session_data in sessions.items():
-        session_list.append({
-            "session_id": session_id,
-            "created_at": session_data.get("created_at"),
-            "transcript_count": len(transcripts_by_session.get(session_id, [])),
-            "suggestion_count": len(suggestions_by_session.get(session_id, [])),
-        })
-    return {"sessions": session_list}
+    conn = get_connection()
+    try:
+        with conn.cursor() as cur:
+            cur.execute("""
+                SELECT s.id, s.created_at, s.status,
+                       (SELECT COUNT(*) FROM transcripts t WHERE t.session_id = s.id),
+                       (SELECT COUNT(*) FROM suggestions sg WHERE sg.session_id = s.id)
+                FROM sessions s ORDER BY s.created_at DESC
+            """)
+            return {"sessions": [
+                {
+                    "session_id": r[0],
+                    "created_at": r[1].isoformat() if r[1] else None,
+                    "status": r[2],
+                    "transcript_count": r[3],
+                    "suggestion_count": r[4],
+                }
+                for r in cur.fetchall()
+            ]}
+    finally:
+        conn.close()
 
 
 @app.get("/sessions/{session_id}/transcript")
 async def get_session_transcript(session_id: str):
-    """
-    Get transcript for a specific session.
-
-    Args:
-        session_id: Session identifier
-
-    Returns:
-        List of transcripts for the session
-    """
-    transcripts = transcripts_by_session.get(session_id, [])
-    return {
-        "session_id": session_id,
-        "transcripts": [
-            {**t.model_dump(), "timestamp": t.timestamp.isoformat()}
-            for t in transcripts
-        ]
-    }
+    conn = get_connection()
+    try:
+        with conn.cursor() as cur:
+            cur.execute(
+                "SELECT text, timestamp FROM transcripts WHERE session_id = %s ORDER BY timestamp ASC",
+                (session_id,),
+            )
+            return {
+                "session_id": session_id,
+                "transcripts": [
+                    {"session_id": session_id, "text": r[0],
+                     "timestamp": r[1].isoformat() if r[1] else None}
+                    for r in cur.fetchall()
+                ],
+            }
+    finally:
+        conn.close()
 
 
 @app.get("/sessions/{session_id}/suggestions")
 async def get_session_suggestions(session_id: str):
-    """
-    Get suggestions for a specific session.
-
-    Args:
-        session_id: Session identifier
-
-    Returns:
-        List of suggestions for the session
-    """
-    suggestions = suggestions_by_session.get(session_id, [])
-    return {
-        "session_id": session_id,
-        "suggestions": [
-            {**s.model_dump(), "timestamp": s.timestamp.isoformat()}
-            for s in suggestions
-        ]
-    }
+    conn = get_connection()
+    try:
+        with conn.cursor() as cur:
+            cur.execute(f"{SUGGESTION_SELECT} WHERE session_id = %s ORDER BY timestamp ASC",
+                        (session_id,))
+            return {
+                "session_id": session_id,
+                "suggestions": [_row_to_suggestion_dict(r) for r in cur.fetchall()],
+            }
+    finally:
+        conn.close()
 
 
 @app.get("/sessions/{session_id}/assignment")
 async def get_session_assignment(session_id: str):
-    """
-    Get vehicle assignment for a specific session.
-    Fetches from Geospatial Dispatch Service.
-
-    Args:
-        session_id: Session identifier
-
-    Returns:
-        Assignment suggestion
-    """
     try:
         async with httpx.AsyncClient() as client:
             response = await client.get(
-                f"{GEOSPATIAL_DISPATCH_URL}/assignments/{session_id}",
-                timeout=5.0
+                f"{GEOSPATIAL_DISPATCH_URL}/assignments/{session_id}", timeout=5.0,
             )
             if response.status_code == 404:
                 raise HTTPException(status_code=404, detail="Assignment not found")
@@ -373,16 +438,14 @@ async def get_session_assignment(session_id: str):
         raise HTTPException(status_code=503, detail="Geospatial service unavailable")
 
 
-class FindBestRequest(BaseModel):
-    incident_id: str
-    exclude_vehicles: list[str] = []
+# ---------------------------------------------------------------------------
+# Dispatch proxies
+# ---------------------------------------------------------------------------
 
-
-async def _find_best_and_broadcast(incident_id: str, exclude_vehicles: list[str] = []):
-    """Call geospatial-dispatch find-best and broadcast the result via WebSocket.
-
-    Returns the suggestion data dict on success, or None on failure.
-    """
+async def _find_best_and_broadcast(incident_id: str, exclude_vehicles: list[str] | None = None):
+    """Call geospatial-dispatch find-best and broadcast the result via WebSocket."""
+    if exclude_vehicles is None:
+        exclude_vehicles = []
     try:
         async with httpx.AsyncClient() as client:
             response = await client.post(
@@ -393,18 +456,21 @@ async def _find_best_and_broadcast(incident_id: str, exclude_vehicles: list[str]
             response.raise_for_status()
             data = response.json()
 
-        # Track the active suggestion for this incident
         suggestion_id = data.get("suggestion_id")
-        if incident_id not in incident_dispatch_state:
-            incident_dispatch_state[incident_id] = {"declined_vehicles": [], "suggestion_id": None}
-        incident_dispatch_state[incident_id]["suggestion_id"] = suggestion_id
+        conn = get_connection()
+        try:
+            with conn.cursor() as cur:
+                cur.execute(
+                    """UPDATE incidents SET dispatch_metadata =
+                       jsonb_set(COALESCE(dispatch_metadata, '{}'), '{suggestion_id}', %s::jsonb)
+                       WHERE id = %s""",
+                    (json.dumps(suggestion_id), incident_id),
+                )
+            conn.commit()
+        finally:
+            conn.close()
 
-        # Broadcast dispatch suggestion to all connected Dashboard clients
-        await manager.broadcast({
-            "type": "dispatch_suggestion",
-            "data": data,
-        })
-
+        await manager.broadcast({"type": "dispatch_suggestion", "data": data})
         logger.info(f"Broadcast dispatch_suggestion for incident {incident_id}: vehicle {data.get('suggested_vehicle_id')}")
         return data
 
@@ -419,18 +485,17 @@ async def _find_best_and_broadcast(incident_id: str, exclude_vehicles: list[str]
 
 @app.post("/assignments/find-best")
 async def proxy_find_best(request: FindBestRequest):
-    """Proxy find-best to geospatial-dispatch."""
     try:
         async with httpx.AsyncClient() as client:
             response = await client.post(
                 f"{GEOSPATIAL_DISPATCH_URL}/assignments/find-best",
-                json=request.model_dump(),
-                timeout=15.0,
+                json=request.model_dump(), timeout=15.0,
             )
             response.raise_for_status()
             return response.json()
     except httpx.HTTPStatusError as e:
-        raise HTTPException(status_code=e.response.status_code, detail=e.response.json().get("detail", "Error"))
+        raise HTTPException(status_code=e.response.status_code,
+                            detail=e.response.json().get("detail", "Error"))
     except httpx.RequestError as e:
         logger.error(f"Error proxying find-best: {e}")
         raise HTTPException(status_code=503, detail="Geospatial service unavailable")
@@ -438,7 +503,6 @@ async def proxy_find_best(request: FindBestRequest):
 
 @app.post("/assignments/{suggestion_id}/accept")
 async def proxy_accept(suggestion_id: str):
-    """Proxy accept to geospatial-dispatch."""
     try:
         async with httpx.AsyncClient() as client:
             response = await client.post(
@@ -448,7 +512,8 @@ async def proxy_accept(suggestion_id: str):
             response.raise_for_status()
             return response.json()
     except httpx.HTTPStatusError as e:
-        raise HTTPException(status_code=e.response.status_code, detail=e.response.json().get("detail", "Error"))
+        raise HTTPException(status_code=e.response.status_code,
+                            detail=e.response.json().get("detail", "Error"))
     except httpx.RequestError as e:
         logger.error(f"Error proxying accept: {e}")
         raise HTTPException(status_code=503, detail="Geospatial service unavailable")
@@ -456,7 +521,6 @@ async def proxy_accept(suggestion_id: str):
 
 @app.post("/assignments/{suggestion_id}/decline")
 async def proxy_decline(suggestion_id: str):
-    """Proxy decline to geospatial-dispatch."""
     try:
         async with httpx.AsyncClient() as client:
             response = await client.post(
@@ -466,21 +530,15 @@ async def proxy_decline(suggestion_id: str):
             response.raise_for_status()
             return response.json()
     except httpx.HTTPStatusError as e:
-        raise HTTPException(status_code=e.response.status_code, detail=e.response.json().get("detail", "Error"))
+        raise HTTPException(status_code=e.response.status_code,
+                            detail=e.response.json().get("detail", "Error"))
     except httpx.RequestError as e:
         logger.error(f"Error proxying decline: {e}")
         raise HTTPException(status_code=503, detail="Geospatial service unavailable")
 
 
-class DeclineAndReassignRequest(BaseModel):
-    incident_id: str
-    declined_vehicle_id: str
-
-
 @app.post("/assignments/{suggestion_id}/decline-and-reassign")
 async def decline_and_reassign(suggestion_id: str, req: DeclineAndReassignRequest):
-    """Decline the current suggestion, add the vehicle to the exclude list, and find the next best."""
-    # Decline the current suggestion on geospatial-dispatch
     try:
         async with httpx.AsyncClient() as client:
             response = await client.post(
@@ -491,40 +549,37 @@ async def decline_and_reassign(suggestion_id: str, req: DeclineAndReassignReques
     except Exception as e:
         logger.warning(f"Error declining suggestion {suggestion_id}: {e}")
 
-    # Track declined vehicles for this incident
-    if req.incident_id not in incident_dispatch_state:
-        incident_dispatch_state[req.incident_id] = {"declined_vehicles": [], "suggestion_id": None}
-    state = incident_dispatch_state[req.incident_id]
-    if req.declined_vehicle_id not in state["declined_vehicles"]:
-        state["declined_vehicles"].append(req.declined_vehicle_id)
+    conn = get_connection()
+    try:
+        with conn.cursor() as cur:
+            cur.execute("SELECT dispatch_metadata FROM incidents WHERE id = %s", (req.incident_id,))
+            row = cur.fetchone()
+            metadata = row[0] if row and row[0] else {}
+            declined = metadata.get("declined_vehicles", [])
+            if req.declined_vehicle_id not in declined:
+                declined.append(req.declined_vehicle_id)
+            metadata["declined_vehicles"] = declined
+            cur.execute("UPDATE incidents SET dispatch_metadata = %s WHERE id = %s",
+                        (json.dumps(metadata), req.incident_id))
+        conn.commit()
+    finally:
+        conn.close()
 
-    # Find the next best vehicle, excluding all previously declined ones
-    dispatch_data = await _find_best_and_broadcast(
-        req.incident_id,
-        exclude_vehicles=state["declined_vehicles"],
-    )
-
+    dispatch_data = await _find_best_and_broadcast(req.incident_id, exclude_vehicles=declined)
     if not dispatch_data:
         return {"status": "no_vehicles_available", "suggestion_id": suggestion_id}
-
     return {"status": "reassigned", "dispatch_suggestion": dispatch_data}
 
 
+# ---------------------------------------------------------------------------
+# Vehicles & Active Routes (DB-backed dispatches)
+# ---------------------------------------------------------------------------
+
 @app.get("/vehicles")
 async def get_vehicles():
-    """
-    Get list of vehicles.
-    Fetches from Geospatial Dispatch Service.
-
-    Returns:
-        List of vehicles
-    """
     try:
         async with httpx.AsyncClient() as client:
-            response = await client.get(
-                f"{GEOSPATIAL_DISPATCH_URL}/vehicles",
-                timeout=5.0
-            )
+            response = await client.get(f"{GEOSPATIAL_DISPATCH_URL}/vehicles", timeout=5.0)
             response.raise_for_status()
             return response.json()
     except httpx.RequestError as e:
@@ -534,17 +589,30 @@ async def get_vehicles():
 
 @app.get("/active-routes")
 async def get_active_routes():
-    """Return all active dispatch routes (survives frontend refresh)."""
-    return {"routes": active_routes}
-
-
-@app.post("/admin/reset")
-async def admin_reset():
-    """Wipe all DB data and in-memory state, reset vehicles, broadcast to clients."""
-    # 1. Clear database tables (incidents has FK to sessions, so delete order matters)
+    """Return all active dispatch routes from DB (persists across restarts)."""
     conn = get_connection()
     try:
         with conn.cursor() as cur:
+            cur.execute("SELECT vehicle_id, incident_id, route FROM dispatches WHERE status = 'active'")
+            routes = {}
+            for r in cur.fetchall():
+                routes[r[0]] = {"incident_id": r[1], "route": r[2]}
+            return {"routes": routes}
+    finally:
+        conn.close()
+
+
+# ---------------------------------------------------------------------------
+# Admin
+# ---------------------------------------------------------------------------
+
+@app.post("/admin/reset")
+async def admin_reset():
+    conn = get_connection()
+    try:
+        with conn.cursor() as cur:
+            cur.execute("DELETE FROM incident_events")
+            cur.execute("DELETE FROM dispatches")
             cur.execute("DELETE FROM incidents")
             cur.execute("DELETE FROM suggestions")
             cur.execute("DELETE FROM transcripts")
@@ -554,156 +622,130 @@ async def admin_reset():
     finally:
         conn.close()
 
-    # 2. Clear all in-memory state
-    sessions.clear()
-    transcripts_by_session.clear()
-    suggestions_by_session.clear()
-    suggestions_by_id.clear()
-    active_routes.clear()
     vehicle_statuses.clear()
-    incident_dispatch_state.clear()
 
-    # 3. Reset vehicles on geospatial-dispatch
     try:
         async with httpx.AsyncClient() as client:
-            resp = await client.post(
-                f"{GEOSPATIAL_DISPATCH_URL}/admin/reset", timeout=10.0
-            )
+            resp = await client.post(f"{GEOSPATIAL_DISPATCH_URL}/admin/reset", timeout=10.0)
             resp.raise_for_status()
             logger.info("Geospatial-dispatch reset successful")
     except Exception as e:
         logger.warning(f"Failed to reset geospatial-dispatch: {e}")
 
-    # 4. Broadcast reset event so all connected frontends clear their state
     await manager.broadcast({"type": "system_reset", "data": {}})
-
     logger.info("Admin reset complete")
     return {"status": "reset_complete"}
 
 
-# --- Geocoding endpoint ---
+# ---------------------------------------------------------------------------
+# Geocoding
+# ---------------------------------------------------------------------------
 
 NOMINATIM_URL = "https://nominatim.openstreetmap.org/search"
 NOMINATIM_HEADERS = {"User-Agent": "ERAS-EmergencyDispatch/1.0"}
 NOMINATIM_VIEWBOX = "-80.7,43.3,-80.3,43.6"
 
 
-class GeocodeRequest(BaseModel):
-    address: str
-
-
 @app.post("/geocode")
 async def geocode_address(req: GeocodeRequest):
-    """Geocode an address string using Nominatim (OpenStreetMap), biased toward Waterloo Region."""
     if not req.address.strip():
         raise HTTPException(status_code=400, detail="Address is required")
-
     try:
         async with httpx.AsyncClient() as client:
             response = await client.get(
                 NOMINATIM_URL,
-                params={
-                    "q": req.address,
-                    "format": "json",
-                    "limit": 1,
-                    "viewbox": NOMINATIM_VIEWBOX,
-                    "bounded": 1,
-                    "countrycodes": "ca",
-                },
-                headers=NOMINATIM_HEADERS,
-                timeout=10.0,
+                params={"q": req.address, "format": "json", "limit": 1,
+                        "viewbox": NOMINATIM_VIEWBOX, "bounded": 1, "countrycodes": "ca"},
+                headers=NOMINATIM_HEADERS, timeout=10.0,
             )
             response.raise_for_status()
             results = response.json()
-
         if results:
-            lat = float(results[0]["lat"])
-            lon = float(results[0]["lon"])
+            lat, lon = float(results[0]["lat"]), float(results[0]["lon"])
             logger.info(f"Geocoded '{req.address}' -> ({lat}, {lon})")
             return {"lat": lat, "lon": lon, "found": True}
-
         logger.info(f"No geocoding results for '{req.address}'")
         return {"lat": None, "lon": None, "found": False}
-
     except Exception as e:
         logger.warning(f"Geocoding failed for '{req.address}': {e}")
         raise HTTPException(status_code=502, detail="Geocoding service unavailable")
 
 
-# --- ACR Code & Suggestion Accept/Dismiss endpoints ---
+# ---------------------------------------------------------------------------
+# ACR Codes
+# ---------------------------------------------------------------------------
 
 @app.get("/acr-codes")
 async def list_acr_codes():
-    """Return all Ontario ACR Problem Codes for frontend dropdowns."""
     return {"codes": get_acr_codes_for_api()}
+
+
+# ---------------------------------------------------------------------------
+# Suggestion Accept / Dismiss (DB-backed)
+# ---------------------------------------------------------------------------
+
+def _get_suggestion_from_db(suggestion_id: str) -> Optional[dict]:
+    conn = get_connection()
+    try:
+        with conn.cursor() as cur:
+            cur.execute(f"{SUGGESTION_SELECT} WHERE id = %s", (suggestion_id,))
+            row = cur.fetchone()
+            return _row_to_suggestion_dict(row) if row else None
+    finally:
+        conn.close()
 
 
 @app.post("/suggestions/{suggestion_id}/accept")
 async def accept_suggestion(suggestion_id: str, req: AcceptSuggestionRequest):
-    """
-    Accept a suggestion: apply optional overrides, create an incident, update status,
-    and automatically trigger dispatch optimization (server-side auto-dispatch).
-    """
-    suggestion = suggestions_by_id.get(suggestion_id)
+    """Accept a suggestion: create an incident (source=call_taker), update status, auto-dispatch."""
+    suggestion = _get_suggestion_from_db(suggestion_id)
     if not suggestion:
         raise HTTPException(status_code=404, detail="Suggestion not found")
 
-    # Determine final values (user overrides take precedence)
-    final_priority = req.priority or suggestion.priority or "Yellow"
-    code_desc = req.incident_code_description or suggestion.incident_code_description or ""
-    code_cat = req.incident_code_category or suggestion.incident_code_category or ""
-    code_num = req.incident_code or suggestion.incident_code or ""
-    incident_type = f"Code {code_num} - {code_cat}: {code_desc}" if code_num else suggestion.value
+    final_priority = req.priority or suggestion.get("priority") or "Yellow"
+    code_desc = req.incident_code_description or suggestion.get("incident_code_description") or ""
+    code_cat = req.incident_code_category or suggestion.get("incident_code_category") or ""
+    code_num = req.incident_code or suggestion.get("incident_code") or ""
+    incident_type = f"Code {code_num} - {code_cat}: {code_desc}" if code_num else suggestion["value"]
 
     weight = PRIORITY_WEIGHT_MAP.get(final_priority, 2)
     incident_id = str(uuid.uuid4())
     now = datetime.now(timezone.utc)
+    session_id = suggestion["session_id"]
 
     conn = get_connection()
     try:
         with conn.cursor() as cur:
-            # Ensure session exists in DB (sessions are in-memory but incidents FK references sessions table)
-            if suggestion.session_id:
+            if session_id:
                 cur.execute(
                     "INSERT INTO sessions (id, created_at, status) VALUES (%s, %s, 'active') ON CONFLICT (id) DO NOTHING",
-                    (suggestion.session_id, now)
+                    (session_id, now),
                 )
             cur.execute(
-                """INSERT INTO incidents (id, session_id, lat, lon, location, type, priority, weight, status, reported_at, updated_at)
-                   VALUES (%s, %s, %s, %s, %s, %s, %s, %s, 'open', %s, %s)""",
-                (incident_id, suggestion.session_id, req.lat, req.lon, req.location, incident_type, final_priority, weight, now, now)
+                """INSERT INTO incidents
+                   (id, session_id, lat, lon, location, type, priority, weight, status, source, reported_at, updated_at)
+                   VALUES (%s, %s, %s, %s, %s, %s, %s, %s, 'open', 'call_taker', %s, %s)""",
+                (incident_id, session_id, req.lat, req.lon, req.location,
+                 incident_type, final_priority, weight, now, now),
             )
+            _log_incident_event(conn, incident_id, "created", None, "open")
+            cur.execute("UPDATE suggestions SET status = 'accepted' WHERE id = %s", (suggestion_id,))
         conn.commit()
 
         with conn.cursor() as cur:
             cur.execute(f"{INCIDENT_SELECT} WHERE id = %s", (incident_id,))
-            row = cur.fetchone()
-            incident_dict = _row_to_incident_dict(row)
+            incident_dict = _row_to_incident_dict(cur.fetchone())
     finally:
         conn.close()
 
-    # Update suggestion status
-    suggestion.status = "accepted"
+    await manager.broadcast({"type": "incident_created", "data": incident_dict})
 
-    # Broadcast the new incident
-    await manager.broadcast({
-        "type": "incident_created",
-        "data": incident_dict
-    })
-
-    # Broadcast suggestion status change
-    suggestion_dict = suggestion.model_dump()
-    suggestion_dict['timestamp'] = suggestion_dict['timestamp'].isoformat()
-    await manager.broadcast({
-        "type": "suggestion_updated",
-        "data": suggestion_dict
-    })
+    suggestion["status"] = "accepted"
+    await manager.broadcast({"type": "suggestion_updated", "data": suggestion})
 
     logger.info(f"Accepted suggestion {suggestion_id}, created incident {incident_id}")
 
-    # Server-side auto-dispatch: find the best ambulance and push suggestion to dispatcher
     dispatch_data = await _find_best_and_broadcast(incident_id)
-
     return {
         "incident": incident_dict,
         "suggestion_status": "accepted",
@@ -713,112 +755,139 @@ async def accept_suggestion(suggestion_id: str, req: AcceptSuggestionRequest):
 
 @app.post("/suggestions/{suggestion_id}/dismiss")
 async def dismiss_suggestion(suggestion_id: str):
-    """Dismiss a suggestion and broadcast the status change."""
-    suggestion = suggestions_by_id.get(suggestion_id)
+    suggestion = _get_suggestion_from_db(suggestion_id)
     if not suggestion:
         raise HTTPException(status_code=404, detail="Suggestion not found")
 
-    suggestion.status = "dismissed"
+    conn = get_connection()
+    try:
+        with conn.cursor() as cur:
+            cur.execute("UPDATE suggestions SET status = 'dismissed' WHERE id = %s", (suggestion_id,))
+        conn.commit()
+    finally:
+        conn.close()
 
-    suggestion_dict = suggestion.model_dump()
-    suggestion_dict['timestamp'] = suggestion_dict['timestamp'].isoformat()
-    await manager.broadcast({
-        "type": "suggestion_updated",
-        "data": suggestion_dict
-    })
-
+    suggestion["status"] = "dismissed"
+    await manager.broadcast({"type": "suggestion_updated", "data": suggestion})
     logger.info(f"Dismissed suggestion {suggestion_id}")
     return {"status": "dismissed"}
 
 
+# ---------------------------------------------------------------------------
+# WebSocket
+# ---------------------------------------------------------------------------
+
 @app.websocket("/ws")
 async def websocket_endpoint(websocket: WebSocket):
-    """
-    WebSocket endpoint for real-time updates.
-
-    Clients connect to receive transcripts and suggestions as they arrive.
-    """
     await manager.connect(websocket)
     try:
         while True:
-            # Keep connection alive and handle client messages if needed
-            data = await websocket.receive_text()
-            # For now, we don't process incoming messages
-            # TODO: handle subscription filters, etc.
+            await websocket.receive_text()
     except WebSocketDisconnect:
         manager.disconnect(websocket)
 
 
+# ---------------------------------------------------------------------------
+# Kafka message processors (all persist to DB)
+# ---------------------------------------------------------------------------
+
 def process_transcript_message(message_value: dict):
-    """Process a transcript message from Kafka."""
     try:
-        # Parse transcript
         if isinstance(message_value.get('timestamp'), str):
             message_value['timestamp'] = datetime.fromisoformat(message_value['timestamp'])
 
         transcript = Transcript(**message_value)
-
-        # Store transcript
         session_id = transcript.session_id
-        transcripts_by_session[session_id].append(transcript)
 
-        # Create session if it doesn't exist
-        if session_id not in sessions:
-            sessions[session_id] = {
-                "created_at": transcript.timestamp.isoformat(),
-            }
+        conn = get_connection()
+        try:
+            with conn.cursor() as cur:
+                cur.execute(
+                    "INSERT INTO sessions (id, created_at, status) VALUES (%s, %s, 'active') ON CONFLICT (id) DO NOTHING",
+                    (session_id, transcript.timestamp),
+                )
+                cur.execute(
+                    "INSERT INTO transcripts (session_id, text, timestamp) VALUES (%s, %s, %s)",
+                    (session_id, transcript.text, transcript.timestamp),
+                )
+            conn.commit()
+        finally:
+            conn.close()
 
-        logger.info(f"Processed transcript for session: {session_id}")
+        logger.info(f"Persisted transcript for session: {session_id}")
 
-        # Broadcast to WebSocket clients (schedule in event loop)
         transcript_dict = transcript.model_dump()
         transcript_dict['timestamp'] = transcript_dict['timestamp'].isoformat()
-        # Use asyncio.run_coroutine_threadsafe to schedule from thread
         global event_loop
         if event_loop and event_loop.is_running():
             asyncio.run_coroutine_threadsafe(
-                manager.broadcast({
-                    "type": "transcript",
-                    "data": transcript_dict
-                }),
-                event_loop
+                manager.broadcast({"type": "transcript", "data": transcript_dict}),
+                event_loop,
             )
-
     except Exception as e:
         logger.error(f"Error processing transcript message: {e}", exc_info=True)
 
 
 def process_suggestion_message(message_value: dict):
-    """Process a suggestion message from Kafka."""
     try:
-        # Parse suggestion
         if isinstance(message_value.get('timestamp'), str):
             message_value['timestamp'] = datetime.fromisoformat(message_value['timestamp'])
 
         suggestion = Suggestion(**message_value)
         session_id = suggestion.session_id
 
-        # Check if this is an update to an existing suggestion (same ID)
-        is_update = suggestion.id and suggestion.id in suggestions_by_id
+        matched_evidence_json = (json.dumps(suggestion.matched_evidence)
+                                 if suggestion.matched_evidence else None)
 
-        if is_update:
-            # Update existing suggestion in-place in the session list
-            old = suggestions_by_id[suggestion.id]
-            session_list = suggestions_by_session.get(session_id, [])
-            for i, s in enumerate(session_list):
-                if s.id == suggestion.id:
-                    session_list[i] = suggestion
-                    break
-            suggestions_by_id[suggestion.id] = suggestion
-            logger.info(f"Updated suggestion for session: {session_id} (id={suggestion.id})")
-        else:
-            # New suggestion
-            suggestions_by_session[session_id].append(suggestion)
-            if suggestion.id:
-                suggestions_by_id[suggestion.id] = suggestion
-            logger.info(f"Processed suggestion for session: {session_id} (id={suggestion.id})")
+        conn = get_connection()
+        try:
+            with conn.cursor() as cur:
+                cur.execute(
+                    "INSERT INTO sessions (id, created_at, status) VALUES (%s, CURRENT_TIMESTAMP, 'active') ON CONFLICT (id) DO NOTHING",
+                    (session_id,),
+                )
 
-        # Broadcast to WebSocket clients
+                is_update = False
+                if suggestion.id:
+                    cur.execute("SELECT id FROM suggestions WHERE id = %s", (suggestion.id,))
+                    is_update = cur.fetchone() is not None
+
+                if is_update:
+                    cur.execute(
+                        """UPDATE suggestions SET suggestion_type=%s, value=%s, status=%s, timestamp=%s,
+                           incident_code=%s, incident_code_description=%s, incident_code_category=%s,
+                           priority=%s, confidence=%s, matched_evidence=%s,
+                           extracted_location=%s, extracted_lat=%s, extracted_lon=%s, location_confidence=%s
+                           WHERE id=%s""",
+                        (suggestion.suggestion_type, suggestion.value, suggestion.status,
+                         suggestion.timestamp, suggestion.incident_code,
+                         suggestion.incident_code_description, suggestion.incident_code_category,
+                         suggestion.priority, suggestion.confidence, matched_evidence_json,
+                         suggestion.extracted_location, suggestion.extracted_lat,
+                         suggestion.extracted_lon, suggestion.location_confidence,
+                         suggestion.id),
+                    )
+                    logger.info(f"Updated suggestion in DB: session={session_id} id={suggestion.id}")
+                else:
+                    cur.execute(
+                        """INSERT INTO suggestions
+                           (id, session_id, suggestion_type, value, status, timestamp,
+                            incident_code, incident_code_description, incident_code_category,
+                            priority, confidence, matched_evidence,
+                            extracted_location, extracted_lat, extracted_lon, location_confidence)
+                           VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)""",
+                        (suggestion.id, session_id, suggestion.suggestion_type, suggestion.value,
+                         suggestion.status, suggestion.timestamp, suggestion.incident_code,
+                         suggestion.incident_code_description, suggestion.incident_code_category,
+                         suggestion.priority, suggestion.confidence, matched_evidence_json,
+                         suggestion.extracted_location, suggestion.extracted_lat,
+                         suggestion.extracted_lon, suggestion.location_confidence),
+                    )
+                    logger.info(f"Inserted suggestion in DB: session={session_id} id={suggestion.id}")
+            conn.commit()
+        finally:
+            conn.close()
+
         suggestion_dict = suggestion.model_dump()
         suggestion_dict['timestamp'] = suggestion_dict['timestamp'].isoformat()
         broadcast_type = "suggestion_updated" if is_update else "suggestion"
@@ -826,29 +895,20 @@ def process_suggestion_message(message_value: dict):
         global event_loop
         if event_loop and event_loop.is_running():
             asyncio.run_coroutine_threadsafe(
-                manager.broadcast({
-                    "type": broadcast_type,
-                    "data": suggestion_dict
-                }),
-                event_loop
+                manager.broadcast({"type": broadcast_type, "data": suggestion_dict}),
+                event_loop,
             )
-
     except Exception as e:
         logger.error(f"Error processing suggestion message: {e}", exc_info=True)
 
 
 def process_vehicle_location_message(message_value: dict):
-    """Process a vehicle location message from Kafka."""
     try:
-        # Extract simulator-provided status before building VehicleLocation (which doesn't have a status field)
         status_from_sim = message_value.pop("status", None)
-
         if isinstance(message_value.get('timestamp'), str):
             message_value['timestamp'] = datetime.fromisoformat(message_value['timestamp'])
 
         location = VehicleLocation(**message_value)
-
-        # Use simulator status as source of truth when available; fall back to internal tracking
         if status_from_sim:
             vehicle_statuses[location.vehicle_id] = status_from_sim
         status = vehicle_statuses.get(location.vehicle_id, "available")
@@ -860,34 +920,52 @@ def process_vehicle_location_message(message_value: dict):
         global event_loop
         if event_loop and event_loop.is_running():
             asyncio.run_coroutine_threadsafe(
-                manager.broadcast({
-                    "type": "vehicle_location",
-                    "data": location_dict
-                }),
-                event_loop
+                manager.broadcast({"type": "vehicle_location", "data": location_dict}),
+                event_loop,
             )
-
     except Exception as e:
         logger.error(f"Error processing vehicle location message: {e}", exc_info=True)
 
 
 def process_vehicle_dispatch_message(message_value: dict):
-    """Process a vehicle dispatch message from Kafka and broadcast route to frontend."""
+    """Persist dispatch route, transition incident to dispatched."""
     try:
         vehicle_id = message_value.get("vehicle_id")
         incident_id = message_value.get("incident_id")
         route_raw = message_value.get("route", [])
-
-        # Convert [lat, lon] pairs to {lat, lng} objects for Google Maps
         route = [{"lat": point[0], "lng": point[1]} for point in route_raw]
 
-        # Persist active route so it survives frontend refreshes
-        if vehicle_id and route:
-            active_routes[vehicle_id] = {"incident_id": incident_id, "route": route}
-
-        # Track vehicle status
         if vehicle_id:
             vehicle_statuses[vehicle_id] = "dispatched"
+
+        if vehicle_id and incident_id:
+            conn = get_connection()
+            try:
+                with conn.cursor() as cur:
+                    cur.execute(
+                        "UPDATE dispatches SET status='completed', completed_at=CURRENT_TIMESTAMP "
+                        "WHERE vehicle_id=%s AND status='active'", (vehicle_id,))
+                    if route:
+                        cur.execute(
+                            "INSERT INTO dispatches (incident_id, vehicle_id, route, status) VALUES (%s,%s,%s,'active')",
+                            (incident_id, vehicle_id, json.dumps(route)))
+                    cur.execute("SELECT status FROM incidents WHERE id=%s", (incident_id,))
+                    row = cur.fetchone()
+                    if row:
+                        old_status = row[0]
+                        cur.execute(
+                            "UPDATE incidents SET status='dispatched', assigned_vehicle_id=%s, updated_at=CURRENT_TIMESTAMP WHERE id=%s",
+                            (vehicle_id, incident_id))
+                        _log_incident_event(conn, incident_id, "status_change", old_status, "dispatched", vehicle_id)
+                conn.commit()
+
+                with conn.cursor() as cur:
+                    cur.execute(f"{INCIDENT_SELECT} WHERE id=%s", (incident_id,))
+                    irow = cur.fetchone()
+                    if irow:
+                        _broadcast_incident_update_from_thread(_row_to_incident_dict(irow))
+            finally:
+                conn.close()
 
         logger.info(f"Processed vehicle dispatch for: {vehicle_id} ({len(route)} waypoints)")
 
@@ -896,107 +974,232 @@ def process_vehicle_dispatch_message(message_value: dict):
             asyncio.run_coroutine_threadsafe(
                 manager.broadcast({
                     "type": "vehicle_dispatched",
-                    "data": {
-                        "vehicle_id": vehicle_id,
-                        "incident_id": incident_id,
-                        "route": route,
-                    }
+                    "data": {"vehicle_id": vehicle_id, "incident_id": incident_id, "route": route},
                 }),
-                event_loop
+                event_loop,
             )
-
     except Exception as e:
         logger.error(f"Error processing vehicle dispatch message: {e}", exc_info=True)
 
 
 def process_vehicle_arrival_message(message_value: dict):
-    """Process a vehicle arrival event: mark incident as resolved and broadcast update."""
+    """Vehicle arrived at scene -> transition incident to on_scene."""
     try:
         vehicle_id = message_value.get("vehicle_id")
         incident_id = message_value.get("incident_id")
-
         if not incident_id:
             return
 
-        # Clear the active route; status is managed by simulator via location messages
         if vehicle_id:
-            active_routes.pop(vehicle_id, None)
-            vehicle_statuses[vehicle_id] = "returning"
+            vehicle_statuses[vehicle_id] = "on_scene"
 
-        logger.info(f"Vehicle {vehicle_id} arrived at incident {incident_id}, resolving...")
-
-        # Mark the incident as resolved in DB
         conn = get_connection()
         try:
             with conn.cursor() as cur:
+                cur.execute("SELECT status FROM incidents WHERE id=%s", (incident_id,))
+                row = cur.fetchone()
+                if not row:
+                    return
+                old_status = row[0]
+                cur.execute("UPDATE incidents SET status='on_scene', updated_at=CURRENT_TIMESTAMP WHERE id=%s",
+                            (incident_id,))
+                _log_incident_event(conn, incident_id, "status_change", old_status, "on_scene", vehicle_id)
                 cur.execute(
-                    "UPDATE incidents SET status = 'resolved', updated_at = CURRENT_TIMESTAMP WHERE id = %s",
-                    (incident_id,)
-                )
+                    "UPDATE dispatches SET status='completed', completed_at=CURRENT_TIMESTAMP "
+                    "WHERE vehicle_id=%s AND status='active'", (vehicle_id,))
             conn.commit()
 
-            # Read back the full row to broadcast
             with conn.cursor() as cur:
-                cur.execute(f"{INCIDENT_SELECT} WHERE id = %s", (incident_id,))
-                row = cur.fetchone()
-                if row:
-                    incident_dict = _row_to_incident_dict(row)
-                else:
-                    return
+                cur.execute(f"{INCIDENT_SELECT} WHERE id=%s", (incident_id,))
+                irow = cur.fetchone()
+                if irow:
+                    _broadcast_incident_update_from_thread(_row_to_incident_dict(irow))
         finally:
             conn.close()
 
-        # Broadcast incident_updated so frontend clears the route polyline
-        global event_loop
-        if event_loop and event_loop.is_running():
-            asyncio.run_coroutine_threadsafe(
-                manager.broadcast({
-                    "type": "incident_updated",
-                    "data": incident_dict
-                }),
-                event_loop
-            )
-        logger.info(f"Incident {incident_id} resolved on arrival of {vehicle_id}")
-
+        logger.info(f"Incident {incident_id} on_scene after arrival of {vehicle_id}")
     except Exception as e:
         logger.error(f"Error processing vehicle arrival message: {e}", exc_info=True)
 
 
-def kafka_consumer_thread():
-    """Run Kafka consumer in a separate thread to avoid blocking the event loop."""
-    bootstrap_servers = os.getenv("KAFKA_BOOTSTRAP_SERVERS", "kafka:29092")
+def process_vehicle_transporting_message(message_value: dict):
+    """Ambulance leaving scene heading to hospital -> transporting."""
+    try:
+        vehicle_id = message_value.get("vehicle_id")
+        incident_id = message_value.get("incident_id")
+        route_raw = message_value.get("route", [])
+        if not incident_id:
+            return
 
+        if vehicle_id:
+            vehicle_statuses[vehicle_id] = "transporting"
+
+        route = [{"lat": point[0], "lng": point[1]} for point in route_raw]
+
+        conn = get_connection()
+        try:
+            with conn.cursor() as cur:
+                cur.execute("SELECT status FROM incidents WHERE id=%s", (incident_id,))
+                row = cur.fetchone()
+                if not row:
+                    return
+                old_status = row[0]
+                cur.execute("UPDATE incidents SET status='transporting', updated_at=CURRENT_TIMESTAMP WHERE id=%s",
+                            (incident_id,))
+                _log_incident_event(conn, incident_id, "status_change", old_status, "transporting", vehicle_id)
+                if vehicle_id and route:
+                    cur.execute(
+                        "UPDATE dispatches SET status='completed', completed_at=CURRENT_TIMESTAMP "
+                        "WHERE vehicle_id=%s AND status='active'", (vehicle_id,))
+                    cur.execute(
+                        "INSERT INTO dispatches (incident_id, vehicle_id, route, status) VALUES (%s,%s,%s,'active')",
+                        (incident_id, vehicle_id, json.dumps(route)))
+            conn.commit()
+
+            with conn.cursor() as cur:
+                cur.execute(f"{INCIDENT_SELECT} WHERE id=%s", (incident_id,))
+                irow = cur.fetchone()
+                if irow:
+                    _broadcast_incident_update_from_thread(_row_to_incident_dict(irow))
+        finally:
+            conn.close()
+
+        global event_loop
+        if event_loop and event_loop.is_running():
+            asyncio.run_coroutine_threadsafe(
+                manager.broadcast({
+                    "type": "vehicle_dispatched",
+                    "data": {"vehicle_id": vehicle_id, "incident_id": incident_id, "route": route},
+                }),
+                event_loop,
+            )
+        logger.info(f"Incident {incident_id} transporting with {vehicle_id}")
+    except Exception as e:
+        logger.error(f"Error processing vehicle transporting message: {e}", exc_info=True)
+
+
+def process_vehicle_at_hospital_message(message_value: dict):
+    """Ambulance arrived at hospital -> at_hospital."""
+    try:
+        vehicle_id = message_value.get("vehicle_id")
+        incident_id = message_value.get("incident_id")
+        if not incident_id:
+            return
+
+        if vehicle_id:
+            vehicle_statuses[vehicle_id] = "at_hospital"
+
+        conn = get_connection()
+        try:
+            with conn.cursor() as cur:
+                cur.execute("SELECT status FROM incidents WHERE id=%s", (incident_id,))
+                row = cur.fetchone()
+                if not row:
+                    return
+                old_status = row[0]
+                cur.execute("UPDATE incidents SET status='at_hospital', updated_at=CURRENT_TIMESTAMP WHERE id=%s",
+                            (incident_id,))
+                _log_incident_event(conn, incident_id, "status_change", old_status, "at_hospital", vehicle_id)
+                cur.execute(
+                    "UPDATE dispatches SET status='completed', completed_at=CURRENT_TIMESTAMP "
+                    "WHERE vehicle_id=%s AND status='active'", (vehicle_id,))
+            conn.commit()
+
+            with conn.cursor() as cur:
+                cur.execute(f"{INCIDENT_SELECT} WHERE id=%s", (incident_id,))
+                irow = cur.fetchone()
+                if irow:
+                    _broadcast_incident_update_from_thread(_row_to_incident_dict(irow))
+        finally:
+            conn.close()
+        logger.info(f"Incident {incident_id} at_hospital with {vehicle_id}")
+    except Exception as e:
+        logger.error(f"Error processing vehicle at-hospital message: {e}", exc_info=True)
+
+
+def process_vehicle_resolved_message(message_value: dict):
+    """Vehicle done at hospital -> resolve incident."""
+    try:
+        vehicle_id = message_value.get("vehicle_id")
+        incident_id = message_value.get("incident_id")
+        if not incident_id:
+            return
+
+        if vehicle_id:
+            vehicle_statuses[vehicle_id] = "returning"
+
+        conn = get_connection()
+        try:
+            with conn.cursor() as cur:
+                cur.execute("SELECT status FROM incidents WHERE id=%s", (incident_id,))
+                row = cur.fetchone()
+                if not row:
+                    return
+                old_status = row[0]
+                cur.execute("UPDATE incidents SET status='resolved', updated_at=CURRENT_TIMESTAMP WHERE id=%s",
+                            (incident_id,))
+                _log_incident_event(conn, incident_id, "status_change", old_status, "resolved", vehicle_id)
+                cur.execute(
+                    "UPDATE dispatches SET status='completed', completed_at=CURRENT_TIMESTAMP "
+                    "WHERE vehicle_id=%s AND status='active'", (vehicle_id,))
+            conn.commit()
+
+            with conn.cursor() as cur:
+                cur.execute(f"{INCIDENT_SELECT} WHERE id=%s", (incident_id,))
+                irow = cur.fetchone()
+                if irow:
+                    _broadcast_incident_update_from_thread(_row_to_incident_dict(irow))
+        finally:
+            conn.close()
+        logger.info(f"Incident {incident_id} resolved after {vehicle_id} completed at hospital")
+    except Exception as e:
+        logger.error(f"Error processing vehicle resolved message: {e}", exc_info=True)
+
+
+# ---------------------------------------------------------------------------
+# Kafka consumer thread
+# ---------------------------------------------------------------------------
+
+def kafka_consumer_thread():
+    bootstrap_servers = os.getenv("KAFKA_BOOTSTRAP_SERVERS", "kafka:29092")
     logger.info(f"Starting Kafka consumer. Connecting to: {bootstrap_servers}")
 
     try:
         consumer = create_consumer(
-            topics=["transcripts", "suggestions", "vehicle-locations", "vehicle-dispatches", "vehicle-arrivals"],
+            topics=[
+                "transcripts", "suggestions",
+                "vehicle-locations", "vehicle-dispatches", "vehicle-arrivals",
+                "vehicle-transporting", "vehicle-at-hospital", "vehicle-resolved",
+            ],
             group_id="dashboard-api-service",
-            bootstrap_servers=bootstrap_servers
+            bootstrap_servers=bootstrap_servers,
         )
-
         logger.info("Kafka consumer started. Waiting for messages...")
 
         for message in consumer:
             try:
                 topic = message.topic
-                message_value = message.value
+                mv = message.value
 
                 if topic == "transcripts":
-                    process_transcript_message(message_value)
+                    process_transcript_message(mv)
                 elif topic == "suggestions":
-                    process_suggestion_message(message_value)
+                    process_suggestion_message(mv)
                 elif topic == "vehicle-locations":
-                    process_vehicle_location_message(message_value)
+                    process_vehicle_location_message(mv)
                 elif topic == "vehicle-dispatches":
-                    process_vehicle_dispatch_message(message_value)
+                    process_vehicle_dispatch_message(mv)
                 elif topic == "vehicle-arrivals":
-                    process_vehicle_arrival_message(message_value)
-
+                    process_vehicle_arrival_message(mv)
+                elif topic == "vehicle-transporting":
+                    process_vehicle_transporting_message(mv)
+                elif topic == "vehicle-at-hospital":
+                    process_vehicle_at_hospital_message(mv)
+                elif topic == "vehicle-resolved":
+                    process_vehicle_resolved_message(mv)
             except Exception as e:
                 logger.error(f"Error processing Kafka message: {e}", exc_info=True)
                 continue
-
     except Exception as e:
         logger.error(f"Fatal error in Kafka consumer: {e}", exc_info=True)
     finally:
@@ -1004,14 +1207,14 @@ def kafka_consumer_thread():
             consumer.close()
 
 
+# ---------------------------------------------------------------------------
+# App lifecycle
+# ---------------------------------------------------------------------------
+
 @app.on_event("startup")
 async def startup_event():
-    """Start background tasks on application startup."""
-    # Store event loop reference for use in Kafka consumer thread
     global event_loop
     event_loop = asyncio.get_event_loop()
-
-    # Start Kafka consumer in a separate thread to avoid blocking the event loop
     kafka_thread = threading.Thread(target=kafka_consumer_thread, daemon=True)
     kafka_thread.start()
     logger.info("Dashboard API Service started")
@@ -1019,7 +1222,6 @@ async def startup_event():
 
 @app.on_event("shutdown")
 async def shutdown_event():
-    """Cleanup on application shutdown."""
     logger.info("Dashboard API Service shutting down")
 
 

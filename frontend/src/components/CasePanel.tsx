@@ -23,31 +23,30 @@ export default function CasesPanel({
 	dispatchLoading,
 	dispatchInfoMap = {},
 }: PanelProps): JSX.Element {
-	const [showResolved, setShowResolved] = useState(false);
+	const [showPast, setShowPast] = useState(true);
 
-	const { active, resolved, priorityCounts } = useMemo(() => {
+	const { active, past, priorityCounts } = useMemo(() => {
 		const active: CaseInfo[] = [];
-		const resolved: CaseInfo[] = [];
+		const past: CaseInfo[] = [];
 		const counts: Partial<Record<CasePriority, number>> = {};
 
 		for (const c of incidents) {
 			if (c.status === "resolved") {
-				resolved.push(c);
+				past.push(c);
 			} else {
 				active.push(c);
 				counts[c.priority] = (counts[c.priority] || 0) + 1;
 			}
 		}
 
-		// Sort active: by weight desc (most urgent), then by reported_at asc (oldest first)
 		active.sort((a, b) => {
 			if (b.weight !== a.weight) return b.weight - a.weight;
 			return new Date(a.reported_at).getTime() - new Date(b.reported_at).getTime();
 		});
 
-		resolved.sort((a, b) => new Date(b.updated_at).getTime() - new Date(a.updated_at).getTime());
+		past.sort((a, b) => new Date(b.updated_at).getTime() - new Date(a.updated_at).getTime());
 
-		return { active, resolved, priorityCounts: counts };
+		return { active, past, priorityCounts: counts };
 	}, [incidents]);
 
 	return (
@@ -66,11 +65,15 @@ export default function CasesPanel({
 			</div>
 
 			{/* Active Cases */}
+			<div className="dp-section-header">
+				<span className="dp-section-title">Active Cases</span>
+				{active.length > 0 && <Badge variant="warning" size="sm">{active.length}</Badge>}
+			</div>
 			<div className="dp-case-list">
 				{loading ? (
 					<EmptyState title="Loading incidents..." />
 				) : active.length === 0 ? (
-					<EmptyState title="No active incidents" description="New incidents will appear here automatically." />
+					<EmptyState title="No active incidents" description="New incidents will appear here when passed from call taker." />
 				) : (
 					active.map(c => (
 						<CaseCard
@@ -84,21 +87,19 @@ export default function CasesPanel({
 				)}
 			</div>
 
-			{/* Resolved Cases */}
-			{resolved.length > 0 && (
-				<div className="dp-resolved">
-					<button className="dp-resolved-toggle" onClick={() => setShowResolved(!showResolved)}>
-						<ChevronDown size={14} style={{ transform: showResolved ? 'rotate(0deg)' : 'rotate(-90deg)', transition: 'transform 150ms' }} />
-						<span>Resolved</span>
-						<Badge variant="neutral" size="sm">{resolved.length}</Badge>
-					</button>
-					{showResolved && (
-						<div className="dp-case-list dp-resolved-list">
-							{resolved.map(c => (
-								<CaseCard key={c.id} data={c} dispatchInfo={dispatchInfoMap[c.id]} />
-							))}
-						</div>
-					)}
+			{/* Past Cases */}
+			<div className="dp-section-header dp-past-header">
+				<button className="dp-resolved-toggle" onClick={() => setShowPast(!showPast)}>
+					<ChevronDown size={14} style={{ transform: showPast ? 'rotate(0deg)' : 'rotate(-90deg)', transition: 'transform 150ms' }} />
+					<span className="dp-section-title">Past Cases</span>
+					<Badge variant="neutral" size="sm">{past.length}</Badge>
+				</button>
+			</div>
+			{showPast && past.length > 0 && (
+				<div className="dp-case-list dp-past-list">
+					{past.map(c => (
+						<CaseCard key={c.id} data={c} dispatchInfo={dispatchInfoMap[c.id]} />
+					))}
 				</div>
 			)}
 		</div>

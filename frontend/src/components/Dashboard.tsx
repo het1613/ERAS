@@ -15,6 +15,8 @@ function vehicleToUnit(v: VehicleData): UnitInfo {
 		available: "Available",
 		dispatched: "Dispatched",
 		on_scene: "On-scene",
+		transporting: "Dispatched",
+		at_hospital: "On-scene",
 		returning: "Returning",
 		offline: "Returning",
 	};
@@ -46,6 +48,12 @@ const Dashboard = () => {
 
 	const { incidents } = useIncidents();
 
+	// Only show call-taker-originated incidents in the cases tab
+	const callTakerIncidents = useMemo(
+		() => incidents.filter((i) => i.source === "call_taker"),
+		[incidents],
+	);
+
 	const activeIncidents = useMemo(
 		() => incidents.filter((i) => i.status !== "resolved"),
 		[incidents],
@@ -57,43 +65,48 @@ const Dashboard = () => {
 		return m;
 	}, [vehicles]);
 
+	// Build dispatch info from persisted incident status (status is now granular enough)
 	const dispatchInfoMap = useMemo(() => {
 		const map: Record<string, DispatchInfo> = {};
 
+		// Active dispatch suggestion (highest priority)
 		if (suggestion) {
 			map[suggestion.incidentId] = { phase: "suggested", vehicleId: suggestion.vehicleId };
 		}
 
-		for (const [vehicleId] of routes) {
-			for (const [incidentId, vId] of Object.entries(incidentVehicleMap)) {
-				if (vId === vehicleId && !map[incidentId]) {
-					map[incidentId] = { phase: "en_route", vehicleId };
-				}
-			}
-		}
-
-		for (const [incidentId, vehicleId] of Object.entries(incidentVehicleMap)) {
-			if (map[incidentId]) continue;
-			const vStatus = vehicleStatusById[vehicleId];
-			if (vStatus === "on_scene") {
-				map[incidentId] = { phase: "on_scene", vehicleId };
-			}
-		}
-
 		for (const inc of incidents) {
-			if (inc.status === "in_progress" && !map[inc.id]) {
-				const vehicleId = incidentVehicleMap[inc.id];
-				map[inc.id] = { phase: "dispatched", vehicleId: vehicleId || undefined };
-			}
-			if (inc.status === "resolved" && !map[inc.id]) {
-				map[inc.id] = { phase: "arrived" };
+			if (map[inc.id]) continue;
+
+			const vehicleId = inc.assigned_vehicle_id || incidentVehicleMap[inc.id];
+			const vStatus = vehicleId ? vehicleStatusById[vehicleId] : undefined;
+
+			switch (inc.status) {
+				case "dispatched": {
+					const hasRoute = vehicleId && routes.some(([vid]) => vid === vehicleId);
+					map[inc.id] = { phase: hasRoute ? "en_route" : "dispatched", vehicleId };
+					break;
+				}
+				case "en_route":
+					map[inc.id] = { phase: "en_route", vehicleId };
+					break;
+				case "on_scene":
+					map[inc.id] = { phase: "on_scene", vehicleId };
+					break;
+				case "transporting":
+					map[inc.id] = { phase: "transporting", vehicleId };
+					break;
+				case "at_hospital":
+					map[inc.id] = { phase: "at_hospital", vehicleId };
+					break;
+				case "resolved":
+					map[inc.id] = { phase: "resolved" };
+					break;
 			}
 		}
 
 		return map;
-	}, [suggestion, routes, incidentVehicleMap, incidents, vehicleStatusById]);
+	}, [suggestion, incidents, routes, incidentVehicleMap, vehicleStatusById]);
 
-	// Build assignment context for ambulance cards
 	const assignmentMap = useMemo(() => {
 		const m: Record<string, { incidentType: string; location: string }> = {};
 		for (const [incidentId, vehicleId] of Object.entries(incidentVehicleMap)) {
@@ -105,7 +118,7 @@ const Dashboard = () => {
 		return m;
 	}, [incidentVehicleMap, incidents]);
 
-	const activeCaseCount = incidents.filter(i => i.status !== "resolved").length;
+	const activeCaseCount = callTakerIncidents.filter(i => i.status !== "resolved").length;
 
 	return (
 		<div className="dash">
@@ -136,7 +149,7 @@ const Dashboard = () => {
 						<CasesPanel
 							activeView={activeView}
 							handleViewChange={setActiveView}
-							incidents={incidents}
+							incidents={callTakerIncidents}
 							loading={false}
 							onDispatch={findBest}
 							dispatchLoading={dispatchLoading}

@@ -815,28 +815,73 @@
 
 .ct-card-actions .eras-btn { flex: 1; }
 
-/* Fail-soft */
-.ct-failsoft-card {
-  padding: var(--space-4);
+/* Manual Incident Entry */
+.ct-manual-card {
   background: var(--surface-primary);
   border: 1px dashed var(--border-strong);
   border-radius: var(--radius-lg);
+  overflow: hidden;
+  transition: border-color var(--transition-fast), box-shadow var(--transition-fast);
 }
 
-.ct-failsoft-header {
+.ct-manual-card-open {
+  border-style: solid;
+  border-color: var(--accent-blue);
+  box-shadow: 0 0 0 1px rgba(37, 99, 235, 0.08);
+}
+
+.ct-manual-toggle {
   display: flex;
   align-items: center;
   gap: var(--space-2);
+  width: 100%;
+  padding: var(--space-3) var(--space-4);
+  background: none;
+  border: none;
+  cursor: pointer;
   font-size: var(--text-sm);
   font-weight: var(--weight-semibold);
-  color: var(--accent-warning);
-  margin-bottom: var(--space-2);
+  color: var(--text-secondary);
+  font-family: var(--font-sans);
+  transition: color var(--transition-fast), background var(--transition-fast);
 }
 
-.ct-failsoft-desc {
-  font-size: var(--text-xs);
-  color: var(--text-tertiary);
-  margin-bottom: var(--space-3);
+.ct-manual-toggle:hover {
+  color: var(--text-primary);
+  background: var(--surface-tertiary);
+}
+
+.ct-manual-card-open .ct-manual-toggle {
+  color: var(--accent-blue);
+  border-bottom: 1px solid var(--border-light);
+}
+
+.ct-manual-toggle > :last-child {
+  margin-left: auto;
+}
+
+.ct-manual-toggle-icon {
+  transition: transform var(--transition-fast);
+}
+
+.ct-manual-toggle-icon-open {
+  transform: rotate(45deg);
+}
+
+.ct-manual-body {
+  padding: var(--space-4);
+  animation: fade-in var(--transition-base);
+}
+
+.ct-manual-body .ct-card-fields {
+  border-top: none;
+  padding-top: 0;
+}
+
+.ct-manual-body .ct-card-actions {
+  margin-top: var(--space-3);
+  padding-top: var(--space-3);
+  border-top: 1px solid var(--border-light);
 }
 
 /* Confirm Dialog Summary */

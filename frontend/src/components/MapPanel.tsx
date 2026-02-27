@@ -12,6 +12,13 @@ import { IncidentMapIcon } from "./IncidentMapIcon";
 import { UnitInfo, UnitStatus } from "./AmbulancePanel";
 import { CaseInfo, CasePriority, DispatchSuggestion } from "./types";
 
+const GRAND_RIVER_HOSPITAL = {
+	lat: 43.455280,
+	lng: -80.505836,
+	name: "Grand River Hospital",
+	address: "835 King St W, Kitchener",
+};
+
 const RAW_PRIORITY_COLORS: Record<CasePriority, string> = {
 	Purple: "#7c3aed",
 	Red: "#dc2626",
@@ -100,6 +107,7 @@ export default function MapPanel({
 	const mapRef = useRef<google.maps.Map | null>(null);
 	const defaultCenter = useMemo(() => ({ lat: 43.4643, lng: -80.5205 }), []);
 	const [hoveredIncidentId, setHoveredIncidentId] = useState<string | null>(null);
+	const [hoveredHospital, setHoveredHospital] = useState(false);
 
 	useEffect(() => {
 		if (focusedUnit && mapRef.current) {
@@ -217,7 +225,7 @@ export default function MapPanel({
 										<span className="map-it-priority" style={{ color: RAW_PRIORITY_COLORS[incident.priority] ?? "#888" }}>
 											{incident.priority}
 										</span>
-										<span className="map-it-status">{incident.status === "open" ? "Open" : "In Progress"}</span>
+										<span className="map-it-status">{incident.status.replace(/_/g, " ").replace(/\b\w/g, c => c.toUpperCase())}</span>
 									</div>
 									<div className="map-it-location">{incident.location}</div>
 								</div>
@@ -225,6 +233,36 @@ export default function MapPanel({
 						</div>
 					</OverlayView>
 				))}
+
+				{/* Hospital Marker */}
+				<OverlayView
+					position={GRAND_RIVER_HOSPITAL}
+					mapPaneName={OverlayView.OVERLAY_MOUSE_TARGET}
+				>
+					<div
+						className="map-marker-container"
+						onMouseEnter={() => setHoveredHospital(true)}
+						onMouseLeave={() => setHoveredHospital(false)}
+						style={{ position: "relative" }}
+					>
+						<div className="map-hospital-icon">
+							<svg width="28" height="28" viewBox="0 0 28 28" fill="none" xmlns="http://www.w3.org/2000/svg">
+								<rect width="28" height="28" rx="6" fill="#dc2626"/>
+								<rect x="2" y="2" width="24" height="24" rx="5" fill="white" stroke="#dc2626" strokeWidth="1.5"/>
+								<path d="M15.5 8H12.5V12.5H8V15.5H12.5V20H15.5V15.5H20V12.5H15.5V8Z" fill="#dc2626"/>
+							</svg>
+						</div>
+						{hoveredHospital && (
+							<div className="map-incident-tooltip">
+								<div className="map-it-header">
+									<span className="map-it-dot" style={{ backgroundColor: "#dc2626" }} />
+									<span className="map-it-type">{GRAND_RIVER_HOSPITAL.name}</span>
+								</div>
+								<div className="map-it-location">{GRAND_RIVER_HOSPITAL.address}</div>
+							</div>
+						)}
+					</div>
+				</OverlayView>
 			</GoogleMap>
 		</div>
 	);
