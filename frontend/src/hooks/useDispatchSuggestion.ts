@@ -35,6 +35,11 @@ export function useDispatchSuggestion(): UseDispatchSuggestionResult {
 
 	useEffect(() => {
 		return subscribe((msg) => {
+			if (msg.type === "system_reset") {
+				setSuggestion(null);
+				setLoading(false);
+				return;
+			}
 			if (msg.type === "dispatch_suggestion" && msg.data) {
 				const parsed = parseSuggestionData(msg.data);
 				setSuggestion(parsed);

@@ -436,6 +436,17 @@ async def accept_assignment(suggestion_id: str):
     return {"status": "accepted", "suggestion_id": suggestion_id, "vehicle_id": assignment.suggested_vehicle_id}
 
 
+@app.post("/admin/reset")
+async def admin_reset():
+    """Reset all in-memory state: vehicles back to available, clear assignments."""
+    for vehicle in MOCK_VEHICLES:
+        vehicle.status = "available"
+    vehicle_assignments.clear()
+    vehicle_tracker.reset_positions(MOCK_VEHICLES)
+    logger.info("Admin reset: all vehicles available, assignments cleared")
+    return {"status": "reset_complete"}
+
+
 @app.post("/assignments/{suggestion_id}/decline")
 async def decline_assignment(suggestion_id: str):
     """Decline a vehicle assignment suggestion, removing it from memory."""

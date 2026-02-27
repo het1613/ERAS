@@ -96,6 +96,19 @@ export function useVehicleUpdates(): UseVehicleUpdatesResult {
 
 	const handleMessage = useCallback(
 		(msg: { type: string; data: any }) => {
+			if (msg.type === "system_reset") {
+				setRouteMap(new Map());
+				fullRouteMap.current = new Map();
+				setIncidentVehicleMap({});
+				setVehicleMap((prev) => {
+					const next = new Map<string, VehicleData>();
+					for (const [id, v] of prev) {
+						next.set(id, { ...v, status: "available" });
+					}
+					return next;
+				});
+				return;
+			}
 			if (msg.type === "vehicle_location") {
 				const { vehicle_id, lat, lon, status } = msg.data;
 				setVehicleMap((prev) => {

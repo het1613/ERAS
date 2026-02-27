@@ -83,3 +83,8 @@ class VehicleLocationTracker:
         for vehicle in self._vehicles:
             if vehicle.id in positions_snapshot:
                 vehicle.lat, vehicle.lon = positions_snapshot[vehicle.id]
+
+    def reset_positions(self, vehicles: List[Vehicle]) -> None:
+        """Re-seed position cache from the (already-reset) vehicle objects."""
+        with self._lock:
+            self._positions = {v.id: (v.lat, v.lon) for v in vehicles}

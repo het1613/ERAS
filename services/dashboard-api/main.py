@@ -538,6 +538,49 @@ async def get_active_routes():
     return {"routes": active_routes}
 
 
+@app.post("/admin/reset")
+async def admin_reset():
+    """Wipe all DB data and in-memory state, reset vehicles, broadcast to clients."""
+    # 1. Clear database tables (incidents has FK to sessions, so delete order matters)
+    conn = get_connection()
+    try:
+        with conn.cursor() as cur:
+            cur.execute("DELETE FROM incidents")
+            cur.execute("DELETE FROM suggestions")
+            cur.execute("DELETE FROM transcripts")
+            cur.execute("DELETE FROM sessions")
+        conn.commit()
+        logger.info("Cleared all database tables")
+    finally:
+        conn.close()
+
+    # 2. Clear all in-memory state
+    sessions.clear()
+    transcripts_by_session.clear()
+    suggestions_by_session.clear()
+    suggestions_by_id.clear()
+    active_routes.clear()
+    vehicle_statuses.clear()
+    incident_dispatch_state.clear()
+
+    # 3. Reset vehicles on geospatial-dispatch
+    try:
+        async with httpx.AsyncClient() as client:
+            resp = await client.post(
+                f"{GEOSPATIAL_DISPATCH_URL}/admin/reset", timeout=10.0
+            )
+            resp.raise_for_status()
+            logger.info("Geospatial-dispatch reset successful")
+    except Exception as e:
+        logger.warning(f"Failed to reset geospatial-dispatch: {e}")
+
+    # 4. Broadcast reset event so all connected frontends clear their state
+    await manager.broadcast({"type": "system_reset", "data": {}})
+
+    logger.info("Admin reset complete")
+    return {"status": "reset_complete"}
+
+
 # --- Geocoding endpoint ---
 
 NOMINATIM_URL = "https://nominatim.openstreetmap.org/search"

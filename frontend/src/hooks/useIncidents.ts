@@ -45,6 +45,10 @@ export function useIncidents(options?: UseIncidentsOptions): UseIncidentsResult 
 	}, [apiUrl]);
 
 	const handleMessage = useCallback((msg: { type: string; data: any }) => {
+		if (msg.type === "system_reset") {
+			setIncidentMap(new Map());
+			return;
+		}
 		if (msg.type === "incident_created" || msg.type === "incident_updated") {
 			const incident: CaseInfo = msg.data;
 			setIncidentMap((prev) => {
