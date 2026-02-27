@@ -1,6 +1,9 @@
 import { useMemo } from "react";
+import { Truck, Navigation, MapPin } from "lucide-react";
+import Badge from "./ui/Badge";
+import EmptyState from "./ui/EmptyState";
+import { ActiveView } from "./types";
 import "./AmbulancePanel.css";
-import AmbulanceCard from "./AmbulanceCard";
 
 export type UnitStatus = "Available" | "On-scene" | "Returning" | "Dispatched";
 
@@ -19,96 +22,100 @@ export interface VehicleData {
 	vehicle_type: string;
 }
 
-export type ActiveView = "Ambulances" | "Cases" | "Transcripts";
+const STATUS_CONFIG: Record<UnitStatus, { color: string; bg: string }> = {
+	Available: { color: "var(--status-available)", bg: "var(--status-available-bg)" },
+	Dispatched: { color: "var(--status-dispatched)", bg: "var(--status-dispatched-bg)" },
+	"On-scene": { color: "var(--status-onscene)", bg: "var(--status-onscene-bg)" },
+	Returning: { color: "var(--status-returning)", bg: "var(--status-returning-bg)" },
+};
+
+const STATUS_SORT_ORDER: Record<UnitStatus, number> = {
+	Dispatched: 0,
+	"On-scene": 1,
+	Available: 2,
+	Returning: 3,
+};
 
 interface PanelProps {
 	activeView: ActiveView;
 	handleViewChange: (view: ActiveView) => void;
 	units: UnitInfo[];
 	onUnitClick: (unit: UnitInfo) => void;
+	assignmentMap?: Record<string, { incidentType: string; location: string }>;
 }
 
-const STATUS_FILTER_ORDER: { key: UnitStatus; cssClass: string }[] = [
-	{ key: "Available", cssClass: "available" },
-	{ key: "Dispatched", cssClass: "dispatched" },
-	{ key: "On-scene", cssClass: "onscene" },
-	{ key: "Returning", cssClass: "returning" },
-];
-
 export default function AmbulancePanel({
-	activeView,
-	handleViewChange,
 	units,
 	onUnitClick,
+	assignmentMap = {},
 }: PanelProps) {
+	const sortedUnits = useMemo(() => {
+		return [...units].sort((a, b) => {
+			const aOrder = STATUS_SORT_ORDER[a.status] ?? 9;
+			const bOrder = STATUS_SORT_ORDER[b.status] ?? 9;
+			return aOrder - bOrder;
+		});
+	}, [units]);
+
 	const statusCounts = useMemo(() => {
-		const counts: Record<string, number> = {};
-		for (const u of units) {
-			counts[u.status] = (counts[u.status] || 0) + 1;
-		}
+		const counts: Partial<Record<UnitStatus, number>> = {};
+		for (const u of units) counts[u.status] = (counts[u.status] || 0) + 1;
 		return counts;
 	}, [units]);
 
 	return (
-		<div className="dispatch-panel">
-			<div className="top-nav">
-				<h2 className="panel-title">Emergency Dispatch</h2>
+		<div className="dp-section">
+			{/* Status summary */}
+			<div className="dp-priority-summary">
+				{(["Dispatched", "On-scene", "Available", "Returning"] as UnitStatus[]).map(s => {
+					const count = statusCounts[s];
+					if (!count) return null;
+					const cfg = STATUS_CONFIG[s];
+					return (
+						<Badge key={s} variant="priority" size="sm" dot color={cfg.color} bg={cfg.bg}>
+							{count} {s}
+						</Badge>
+					);
+				})}
+			</div>
 
-				<div className="status-filters">
-					{STATUS_FILTER_ORDER.map(({ key, cssClass }) => {
-						const count = statusCounts[key] || 0;
-						if (count === 0) return null;
+			{/* Unit List */}
+			<div className="dp-case-list">
+				{sortedUnits.length === 0 ? (
+					<EmptyState title="No units available" />
+				) : (
+					sortedUnits.map(u => {
+						const cfg = STATUS_CONFIG[u.status];
+						const assignment = assignmentMap[u.id.toLowerCase().replace(/\s+/g, "-")];
+
 						return (
-							<button key={key} className={`filter ${cssClass}`}>
-								{count} {key}
+							<button
+								key={u.id}
+								className="amb-card"
+								style={{ borderLeftColor: cfg.color }}
+								onClick={() => onUnitClick(u)}
+							>
+							<div className="amb-card-top">
+								<Truck size={14} style={{ color: cfg.color }} />
+								<span className="amb-card-name">{u.id}</span>
+								<Badge variant="priority" size="sm" dot color={cfg.color} bg={cfg.bg}>
+									{u.status}
+								</Badge>
+							</div>
+							<div className="amb-card-location">
+								<MapPin size={11} />
+								<span className="amb-card-coords">{u.coords}</span>
+							</div>
+							{assignment && (
+								<div className="amb-card-assignment">
+									<Navigation size={11} />
+									<span>{assignment.incidentType} @ {assignment.location}</span>
+								</div>
+							)}
 							</button>
 						);
-					})}
-					<button className="filter all">All</button>
-				</div>
-			</div>
-
-			<div className="active-units">
-				<h3 className="section-title">Active Units</h3>
-
-				{/* Unit List */}
-				<div className="unit-list">
-					{units.map((u) => (
-						// Wrap the card in a div to handle the click
-						<div
-							key={u.id}
-							onClick={() => onUnitClick(u)}
-							style={{ cursor: "pointer" }}
-						>
-							<AmbulanceCard unitData={u} />
-						</div>
-					))}
-				</div>
-			</div>
-
-			{/* Bottom Navigation (Inside both CasePanel.tsx and AmbulancePanel.tsx) */}
-			<div className="bottom-nav">
-				<button
-					className={`nav-item ${activeView === "Ambulances" ? "active" : ""
-						}`}
-					onClick={() => handleViewChange("Ambulances")}
-				>
-					<span className="emoji">🚑</span> Ambulances
-				</button>
-				<button
-					className={`nav-item ${activeView === "Cases" ? "active" : ""
-						}`}
-					onClick={() => handleViewChange("Cases")}
-				>
-					<span className="emoji">⚠️</span> Cases
-				</button>
-				<button
-					className={`nav-item ${activeView === "Transcripts" ? "active" : ""
-						}`}
-					onClick={() => handleViewChange("Transcripts")}
-				>
-					<span className="emoji">📝</span> Transcripts
-				</button>
+					})
+				)}
 			</div>
 		</div>
 	);

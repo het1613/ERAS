@@ -1,21 +1,10 @@
-// CasesPanel.tsx
-import "./CasePanel.css";
+import { useMemo, useState } from "react";
+import { ChevronDown } from "lucide-react";
 import CaseCard, { DispatchInfo } from "./CaseCard";
-import { CaseInfo, CasePriority } from "./types";
-
-type PriorityCounts = {
-	[key in CasePriority]?: number;
-};
-
-const priorityColorMap: Record<CasePriority, string> = {
-	Purple: "purple-text",
-	Red: "red-text",
-	Orange: "orange-text",
-	Yellow: "yellow-text",
-	Green: "green-text",
-};
-
-export type ActiveView = "Ambulances" | "Cases" | "Transcripts";
+import { CaseInfo, CasePriority, PRIORITY_COLORS, ActiveView } from "./types";
+import Badge from "./ui/Badge";
+import EmptyState from "./ui/EmptyState";
+import "./CasePanel.css";
 
 interface PanelProps {
 	activeView: ActiveView;
@@ -28,95 +17,90 @@ interface PanelProps {
 }
 
 export default function CasesPanel({
-	activeView,
-	handleViewChange,
 	incidents,
 	loading = false,
 	onDispatch,
 	dispatchLoading,
 	dispatchInfoMap = {},
 }: PanelProps): JSX.Element {
+	const [showResolved, setShowResolved] = useState(false);
 
-	const priorityCounts: PriorityCounts = incidents.reduce((acc, c) => {
-		acc[c.priority] = (acc[c.priority] || 0) + 1;
-		return acc;
-	}, {} as PriorityCounts);
+	const { active, resolved, priorityCounts } = useMemo(() => {
+		const active: CaseInfo[] = [];
+		const resolved: CaseInfo[] = [];
+		const counts: Partial<Record<CasePriority, number>> = {};
+
+		for (const c of incidents) {
+			if (c.status === "resolved") {
+				resolved.push(c);
+			} else {
+				active.push(c);
+				counts[c.priority] = (counts[c.priority] || 0) + 1;
+			}
+		}
+
+		// Sort active: by weight desc (most urgent), then by reported_at asc (oldest first)
+		active.sort((a, b) => {
+			if (b.weight !== a.weight) return b.weight - a.weight;
+			return new Date(a.reported_at).getTime() - new Date(b.reported_at).getTime();
+		});
+
+		resolved.sort((a, b) => new Date(b.updated_at).getTime() - new Date(a.updated_at).getTime());
+
+		return { active, resolved, priorityCounts: counts };
+	}, [incidents]);
 
 	return (
-		<div className="dispatch-panel cases-panel">
-			{/* Top Bar with Title */}
-			<div className="top-nav">
-				<h2 className="panel-title">
-					<span className="emoji">🚑</span> Emergency Dispatch
-				</h2>
+		<div className="dp-section">
+			{/* Priority summary */}
+			<div className="dp-priority-summary">
+				{(["Purple", "Red", "Orange", "Yellow", "Green"] as CasePriority[]).map(p => {
+					const count = priorityCounts[p];
+					if (!count) return null;
+					return (
+						<Badge key={p} variant="priority" size="sm" dot color={PRIORITY_COLORS[p]}>
+							{count} {p}
+						</Badge>
+					);
+				})}
+			</div>
 
-				{/* Status Filter Buttons */}
-				<div className="status-filters">
-					{(Object.keys(priorityCounts) as CasePriority[]).map(
-						(priority) => {
-							const count = priorityCounts[priority] || 0;
-							return (
-								<button
-									key={priority}
-									className={`filter ${priority.toLowerCase()} ${priorityColorMap[priority]
-										}`}
-								>
-									{count} {priority}
-								</button>
-							);
-						}
+			{/* Active Cases */}
+			<div className="dp-case-list">
+				{loading ? (
+					<EmptyState title="Loading incidents..." />
+				) : active.length === 0 ? (
+					<EmptyState title="No active incidents" description="New incidents will appear here automatically." />
+				) : (
+					active.map(c => (
+						<CaseCard
+							key={c.id}
+							data={c}
+							onDispatch={onDispatch}
+							dispatchLoading={dispatchLoading}
+							dispatchInfo={dispatchInfoMap[c.id]}
+						/>
+					))
+				)}
+			</div>
+
+			{/* Resolved Cases */}
+			{resolved.length > 0 && (
+				<div className="dp-resolved">
+					<button className="dp-resolved-toggle" onClick={() => setShowResolved(!showResolved)}>
+						<ChevronDown size={14} style={{ transform: showResolved ? 'rotate(0deg)' : 'rotate(-90deg)', transition: 'transform 150ms' }} />
+						<span>Resolved</span>
+						<Badge variant="neutral" size="sm">{resolved.length}</Badge>
+					</button>
+					{showResolved && (
+						<div className="dp-case-list dp-resolved-list">
+							{resolved.map(c => (
+								<CaseCard key={c.id} data={c} dispatchInfo={dispatchInfoMap[c.id]} />
+							))}
+						</div>
 					)}
-					<button className="filter all">All</button>
 				</div>
-			</div>
-
-			<div className="active-cases">
-				<h3 className="section-title">Active Cases</h3>
-
-				{/* Case List */}
-				<div className="case-list">
-					{loading ? (
-						<p>Loading incidents...</p>
-					) : incidents.length === 0 ? (
-						<p>No incidents reported.</p>
-					) : (
-						incidents.map((c) => (
-							<CaseCard
-								key={c.id}
-								data={c}
-								onDispatch={onDispatch}
-								dispatchLoading={dispatchLoading}
-								dispatchInfo={dispatchInfoMap[c.id]}
-							/>
-						))
-					)}
-				</div>
-			</div>
-
-			{/* Bottom Navigation */}
-			<div className="bottom-nav">
-				<button
-					className={`nav-item ${activeView === "Ambulances" ? "active" : ""
-						}`}
-					onClick={() => handleViewChange("Ambulances")}
-				>
-					<span className="emoji">🚑</span> Ambulances
-				</button>
-				<button
-					className={`nav-item ${activeView === "Cases" ? "active" : ""
-						}`}
-					onClick={() => handleViewChange("Cases")}
-				>
-					<span className="emoji">⚠️</span> Cases
-				</button>
-				<button
-					className={`nav-item ${activeView === "Transcripts" ? "active" : ""
-						}`}
-					onClick={() => handleViewChange("Transcripts")}
-				>
-					<span className="emoji">📝</span> Transcripts
-				</button>
-			</div>
+			)}
 		</div>
 	);
 }

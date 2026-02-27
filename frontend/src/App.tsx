@@ -2,6 +2,7 @@ import { BrowserRouter, Routes, Route } from "react-router-dom";
 import Dashboard from "./components/Dashboard";
 import Caller from "./components/Caller";
 import CallTaker from "./components/CallTaker";
+import NavBar from "./components/NavBar";
 import { WebSocketProvider } from "./contexts/WebSocketContext";
 import "./App.css";
 
@@ -10,6 +11,7 @@ function App() {
 		<BrowserRouter>
 			<WebSocketProvider>
 				<div className="app">
+					<NavBar />
 					<main className="app-main">
 						<Routes>
 							<Route path="/" element={<Dashboard />} />

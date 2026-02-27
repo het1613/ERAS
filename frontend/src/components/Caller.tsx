@@ -1,229 +1,295 @@
-import React, { useState, useRef, useEffect } from 'react';
-import './Caller.css'; // We'll create this CSS file too
+import React, { useState, useRef, useEffect, useCallback } from 'react';
+import { Phone, PhoneOff, Mic, Radio } from 'lucide-react';
+import Button from './ui/Button';
+import './Caller.css';
+
+type CallState = 'ready' | 'connecting' | 'active' | 'ended';
 
 const Caller: React.FC = () => {
-    const [isCallActive, setIsCallActive] = useState(false);
-    const [status, setStatus] = useState<string>('Ready to call');
-    const [sessionId, setSessionId] = useState<string | null>(null);
+  const [callState, setCallState] = useState<CallState>('ready');
+  const [status, setStatus] = useState('Ready to call');
+  const [transcripts, setTranscripts] = useState<{ text: string; time: string }[]>([]);
+  const [elapsed, setElapsed] = useState(0);
+  const [audioLevel, setAudioLevel] = useState(0);
 
-    // Refs for WebSocket and Audio
-    const wsRef = useRef<WebSocket | null>(null);
-    const streamRef = useRef<MediaStream | null>(null);
-    const audioContextRef = useRef<AudioContext | null>(null);
-    const processorRef = useRef<ScriptProcessorNode | null>(null);
-    const sourceRef = useRef<MediaStreamAudioSourceNode | null>(null);
+  const wsRef = useRef<WebSocket | null>(null);
+  const dashWsRef = useRef<WebSocket | null>(null);
+  const streamRef = useRef<MediaStream | null>(null);
+  const audioContextRef = useRef<AudioContext | null>(null);
+  const processorRef = useRef<ScriptProcessorNode | null>(null);
+  const sourceRef = useRef<MediaStreamAudioSourceNode | null>(null);
+  const analyserRef = useRef<AnalyserNode | null>(null);
+  const animFrameRef = useRef<number>(0);
+  const timerRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  const sessionIdRef = useRef<string | null>(null);
+  const transcriptEndRef = useRef<HTMLDivElement>(null);
 
-    // Audio configuration
-    const TARGET_SAMPLE_RATE = 16000;
-    const BUFFER_SIZE = 4096;
+  const TARGET_SAMPLE_RATE = 16000;
+  const BUFFER_SIZE = 4096;
 
-    const convertFloat32ToInt16 = (buffer: Float32Array): Int16Array => {
-        let l = buffer.length;
-        const buf = new Int16Array(l);
-        while (l--) {
-            buf[l] = Math.min(1, Math.max(-1, buffer[l])) * 0x7FFF;
-        }
-        return buf;
-    };
+  const convertFloat32ToInt16 = (buffer: Float32Array): Int16Array => {
+    let l = buffer.length;
+    const buf = new Int16Array(l);
+    while (l--) buf[l] = Math.min(1, Math.max(-1, buffer[l])) * 0x7FFF;
+    return buf;
+  };
 
-    // Simple downsampler as fallback, but we prefer native browser resampling
-    const downsampleBuffer = (buffer: Float32Array, sampleRate: number, outSampleRate: number): Float32Array => {
-        if (outSampleRate === sampleRate) {
-            return buffer;
-        }
-        if (outSampleRate > sampleRate) {
-            // Upsampling (shouldn't happen with 16k target) - just return as is or error
-            return buffer;
-        }
-        const sampleRateRatio = sampleRate / outSampleRate;
-        const newLength = Math.round(buffer.length / sampleRateRatio);
-        const result = new Float32Array(newLength);
-        let offsetResult = 0;
-        let offsetBuffer = 0;
-        while (offsetResult < result.length) {
-            const nextOffsetBuffer = Math.round((offsetResult + 1) * sampleRateRatio);
-            // Use average value of skipped samples
-            let accum = 0, count = 0;
-            for (let i = offsetBuffer; i < nextOffsetBuffer && i < buffer.length; i++) {
-                accum += buffer[i];
-                count++;
-            }
-            result[offsetResult] = accum / count;
-            offsetResult++;
-            offsetBuffer = nextOffsetBuffer;
-        }
-        return result;
-    };
+  const downsampleBuffer = (buffer: Float32Array, sampleRate: number, outSampleRate: number): Float32Array => {
+    if (outSampleRate >= sampleRate) return buffer;
+    const ratio = sampleRate / outSampleRate;
+    const newLength = Math.round(buffer.length / ratio);
+    const result = new Float32Array(newLength);
+    for (let i = 0; i < newLength; i++) {
+      const nextOffset = Math.round((i + 1) * ratio);
+      let accum = 0, count = 0;
+      for (let j = Math.round(i * ratio); j < nextOffset && j < buffer.length; j++) {
+        accum += buffer[j];
+        count++;
+      }
+      result[i] = accum / count;
+    }
+    return result;
+  };
 
-    const startCall = async () => {
+  const formatTime = (seconds: number): string => {
+    const m = Math.floor(seconds / 60).toString().padStart(2, '0');
+    const s = (seconds % 60).toString().padStart(2, '0');
+    return `${m}:${s}`;
+  };
+
+  const updateAudioLevel = useCallback(() => {
+    if (!analyserRef.current) return;
+    const data = new Uint8Array(analyserRef.current.frequencyBinCount);
+    analyserRef.current.getByteFrequencyData(data);
+    const avg = data.reduce((a, b) => a + b, 0) / data.length;
+    setAudioLevel(avg / 255);
+    animFrameRef.current = requestAnimationFrame(updateAudioLevel);
+  }, []);
+
+  const startCall = async () => {
+    try {
+      setCallState('connecting');
+      setStatus('Connecting...');
+      setTranscripts([]);
+      setElapsed(0);
+
+      const ws = new WebSocket('ws://localhost:8001/ws/stream');
+
+      ws.onopen = async () => {
+        setStatus('Connected. Starting audio...');
         try {
-            setStatus('Connecting...');
+          const stream = await navigator.mediaDevices.getUserMedia({
+            audio: { channelCount: 1, echoCancellation: true, noiseSuppression: true, autoGainControl: true },
+          });
+          streamRef.current = stream;
 
-            // Connect to WebSocket
-            const ws = new WebSocket('ws://localhost:8001/ws/stream');
+          const AudioContextClass = window.AudioContext || (window as any).webkitAudioContext;
+          const audioContext = new AudioContextClass({ sampleRate: TARGET_SAMPLE_RATE });
+          audioContextRef.current = audioContext;
 
-            ws.onopen = async () => {
-                console.log('Connected to Audio Ingestion Service');
-                setStatus('Connected. Starting audio...');
+          const source = audioContext.createMediaStreamSource(stream);
+          sourceRef.current = source;
 
-                try {
-                    // Get microphone access - request standard settings
-                    const stream = await navigator.mediaDevices.getUserMedia({
-                        audio: {
-                            channelCount: 1,
-                            echoCancellation: true,
-                            noiseSuppression: true,
-                            autoGainControl: true
-                        }
-                    });
-                    streamRef.current = stream;
+          const analyser = audioContext.createAnalyser();
+          analyser.fftSize = 256;
+          analyserRef.current = analyser;
+          source.connect(analyser);
 
-                    // Initialize AudioContext with preferred sample rate
-                    // Browsers that support this will handle high-quality resampling automatically
-                    const AudioContextClass = (window.AudioContext || (window as any).webkitAudioContext);
-                    const audioContext = new AudioContextClass({ sampleRate: TARGET_SAMPLE_RATE });
-                    audioContextRef.current = audioContext;
+          const processor = audioContext.createScriptProcessor(BUFFER_SIZE, 1, 1);
+          processorRef.current = processor;
 
-                    console.log(`AudioContext created with sample rate: ${audioContext.sampleRate}Hz`);
+          processor.onaudioprocess = (e) => {
+            if (ws.readyState !== WebSocket.OPEN) return;
+            const inputData = e.inputBuffer.getChannelData(0);
+            const downsampled = downsampleBuffer(inputData, audioContext.sampleRate, TARGET_SAMPLE_RATE);
+            const pcm16 = convertFloat32ToInt16(downsampled);
+            ws.send(pcm16.buffer);
+          };
 
-                    const source = audioContext.createMediaStreamSource(stream);
-                    sourceRef.current = source;
+          source.connect(processor);
+          processor.connect(audioContext.destination);
 
-                    // Create ScriptProcessor
-                    // bufferSize, inputChannels, outputChannels
-                    const processor = audioContext.createScriptProcessor(BUFFER_SIZE, 1, 1);
-                    processorRef.current = processor;
+          setStatus('Call in progress');
+          setCallState('active');
 
-                    processor.onaudioprocess = (e) => {
-                        if (ws.readyState !== WebSocket.OPEN) return;
-
-                        const inputData = e.inputBuffer.getChannelData(0); // Mono
-
-                        // If browser respected our sampleRate request, this is a no-op 1:1 copy
-                        // If not, we fall back to our simple downsampler
-                        const downsampled = downsampleBuffer(inputData, audioContext.sampleRate, TARGET_SAMPLE_RATE);
-
-                        // Convert to Int16
-                        const pcm16 = convertFloat32ToInt16(downsampled);
-
-                        // Send as raw bytes
-                        ws.send(pcm16.buffer);
-                    };
-
-                    // Connect graph
-                    source.connect(processor);
-                    processor.connect(audioContext.destination); // Needed for processing to happen
-
-                    setStatus('Call in progress...');
-                    setIsCallActive(true);
-
-                } catch (err) {
-                    console.error('Error accessing microphone:', err);
-                    setStatus('Error: Could not access microphone');
-                    ws.close();
-                }
-            };
-
-            ws.onmessage = (event) => {
-                const data = JSON.parse(event.data);
-                if (data.session_id) {
-                    setSessionId(data.session_id);
-                }
-            };
-
-            ws.onclose = () => {
-                console.log('Disconnected from Audio Ingestion Service');
-                if (isCallActive) {
-                    endCall();
-                }
-                setStatus('Call ended');
-            };
-
-            ws.onerror = (error) => {
-                console.error('WebSocket error:', error);
-                setStatus('Connection error');
-            };
-
-            wsRef.current = ws;
+          timerRef.current = setInterval(() => setElapsed(p => p + 1), 1000);
+          animFrameRef.current = requestAnimationFrame(updateAudioLevel);
 
         } catch (err) {
-            console.error('Error starting call:', err);
-            setStatus('Error starting call');
+          console.error('Microphone error:', err);
+          setStatus('Microphone access denied');
+          setCallState('ready');
+          ws.close();
         }
+      };
+
+      ws.onmessage = (event) => {
+        const data = JSON.parse(event.data);
+        if (data.session_id) {
+          sessionIdRef.current = data.session_id;
+          connectDashboardWs(data.session_id);
+        }
+      };
+
+      ws.onclose = () => {
+        if (callState === 'active') endCall();
+      };
+
+      ws.onerror = () => {
+        setStatus('Connection error');
+        setCallState('ready');
+      };
+
+      wsRef.current = ws;
+    } catch (err) {
+      console.error('Start call error:', err);
+      setStatus('Error starting call');
+      setCallState('ready');
+    }
+  };
+
+  const connectDashboardWs = (sessionId: string) => {
+    const apiUrl = import.meta.env.VITE_API_URL || 'http://localhost:8000';
+    const wsUrl = apiUrl.replace(/^http/, 'ws') + '/ws';
+    const dws = new WebSocket(wsUrl);
+
+    dws.onmessage = (event) => {
+      try {
+        const msg = JSON.parse(event.data);
+        if (msg.type === 'transcript' && msg.data.session_id === sessionId) {
+          setTranscripts(prev => {
+            const exists = prev.some(t => t.text === msg.data.text && t.time === msg.data.timestamp);
+            if (exists) return prev;
+            return [...prev, { text: msg.data.text, time: msg.data.timestamp }];
+          });
+        }
+      } catch { /* ignore */ }
     };
 
-    const endCall = () => {
-        // Stop Audio Processing
-        if (processorRef.current && sourceRef.current) {
-            sourceRef.current.disconnect();
-            processorRef.current.disconnect();
-        }
+    dashWsRef.current = dws;
+  };
 
-        if (audioContextRef.current) {
-            audioContextRef.current.close();
-            audioContextRef.current = null;
-        }
+  const endCall = () => {
+    if (processorRef.current && sourceRef.current) {
+      sourceRef.current.disconnect();
+      processorRef.current.disconnect();
+    }
+    if (audioContextRef.current) { audioContextRef.current.close(); audioContextRef.current = null; }
+    if (streamRef.current) { streamRef.current.getTracks().forEach(t => t.stop()); streamRef.current = null; }
+    if (wsRef.current) { wsRef.current.close(); wsRef.current = null; }
+    if (dashWsRef.current) { dashWsRef.current.close(); dashWsRef.current = null; }
+    if (timerRef.current) { clearInterval(timerRef.current); timerRef.current = null; }
+    if (animFrameRef.current) cancelAnimationFrame(animFrameRef.current);
+    analyserRef.current = null;
+    setAudioLevel(0);
+    setCallState('ended');
+    setStatus('Call ended');
+  };
 
-        // Stop microphone stream
-        if (streamRef.current) {
-            streamRef.current.getTracks().forEach(track => track.stop());
-            streamRef.current = null;
-        }
-
-        // Close WebSocket
-        if (wsRef.current) {
-            wsRef.current.close();
-            wsRef.current = null;
-        }
-
-        setIsCallActive(false);
-        setStatus('Call ended');
-        setSessionId(null);
+  useEffect(() => {
+    return () => {
+      if (callState === 'active') endCall();
     };
+  }, [callState]);
 
-    // Cleanup on unmount
-    useEffect(() => {
-        return () => {
-            if (isCallActive) {
-                endCall();
-            }
-        };
-    }, [isCallActive]);
+  useEffect(() => {
+    transcriptEndRef.current?.scrollIntoView({ behavior: 'smooth' });
+  }, [transcripts]);
 
-    return (
-        <div className="caller-container">
-            <div className="caller-card">
-                <h1>911 Simulator</h1>
+  const waveformBars = 24;
 
-                <div className={`status-indicator ${isCallActive ? 'active' : ''}`}>
-                    {status}
-                </div>
-
-                {sessionId && (
-                    <div className="session-info">
-                        Session ID: {sessionId}
-                    </div>
-                )}
-
-                <div className="controls">
-                    {!isCallActive ? (
-                        <button className="call-btn start-call" onClick={startCall}>
-                            Call 911
-                        </button>
-                    ) : (
-                        <button className="call-btn end-call" onClick={endCall}>
-                            End Call
-                        </button>
-                    )}
-                </div>
-
-                <div className="info-text">
-                    <p>Click "Call 911" to start streaming audio to the ERAS system.</p>
-                    <p>Your microphone will be used to simulate a caller.</p>
-                </div>
-            </div>
+  return (
+    <div className="caller">
+      <div className="caller-card">
+        {/* Header */}
+        <div className="caller-header">
+          <Radio size={18} />
+          <span>911 Simulator</span>
         </div>
-    );
+
+        {/* Status Circle */}
+        <div className={`caller-circle ${callState}`}>
+          {callState === 'active' ? (
+            <div className="caller-circle-inner">
+              <span className="caller-timer">{formatTime(elapsed)}</span>
+              <span className="caller-timer-label">Call Duration</span>
+            </div>
+          ) : callState === 'connecting' ? (
+            <div className="caller-circle-inner">
+              <span className="caller-connecting-spinner" />
+              <span className="caller-timer-label">Connecting...</span>
+            </div>
+          ) : callState === 'ended' ? (
+            <div className="caller-circle-inner">
+              <PhoneOff size={28} />
+              <span className="caller-timer-label">Call Ended</span>
+            </div>
+          ) : (
+            <div className="caller-circle-inner">
+              <Phone size={28} />
+              <span className="caller-timer-label">Ready</span>
+            </div>
+          )}
+        </div>
+
+        {/* Waveform */}
+        {callState === 'active' && (
+          <div className="caller-waveform">
+            {Array.from({ length: waveformBars }).map((_, i) => {
+              const distance = Math.abs(i - waveformBars / 2) / (waveformBars / 2);
+              const height = Math.max(4, audioLevel * 40 * (1 - distance * 0.7) + Math.random() * 4);
+              return <div key={i} className="caller-waveform-bar" style={{ height }} />;
+            })}
+          </div>
+        )}
+
+        {/* Status */}
+        <div className={`caller-status ${callState}`}>{status}</div>
+
+        {/* Controls */}
+        <div className="caller-controls">
+          {callState === 'active' ? (
+            <Button variant="danger" size="lg" icon={<PhoneOff size={18} />} onClick={endCall} fullWidth>
+              End Call
+            </Button>
+          ) : (
+            <Button
+              variant="success"
+              size="lg"
+              icon={callState === 'connecting' ? undefined : <Phone size={18} />}
+              loading={callState === 'connecting'}
+              onClick={startCall}
+              disabled={callState === 'connecting'}
+              fullWidth
+            >
+              {callState === 'ended' ? 'Call Again' : 'Call 911'}
+            </Button>
+          )}
+        </div>
+
+        {/* Live Transcript */}
+        {transcripts.length > 0 && (
+          <div className="caller-transcript">
+            <div className="caller-transcript-header">
+              <Mic size={12} />
+              <span>Live Transcript</span>
+            </div>
+            <div className="caller-transcript-list">
+              {transcripts.map((t, i) => (
+                <div key={i} className="caller-transcript-item">
+                  <span className="caller-transcript-time">
+                    {new Date(t.time).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' })}
+                  </span>
+                  <span className="caller-transcript-text">{t.text}</span>
+                </div>
+              ))}
+              <div ref={transcriptEndRef} />
+            </div>
+          </div>
+        )}
+      </div>
+    </div>
+  );
 };
 
 export default Caller;

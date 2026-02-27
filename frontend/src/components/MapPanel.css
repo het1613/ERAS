@@ -1,318 +1,200 @@
-.map-panel {
-  display: flex;
-  flex-direction: column;
-  height: 100%;
-  overflow: hidden;
-}
-
-.map-panel-header {
-  padding: 1rem;
-  border-bottom: 1px solid #e0e0e0;
-  display: flex;
-  justify-content: space-between;
-  align-items: center;
-}
-
-.map-panel-header h2 {
-  font-size: 1.25rem;
-  font-weight: 600;
-}
-
-.session-badge {
-  font-size: 0.875rem;
-  padding: 0.25rem 0.75rem;
-  background-color: #eff6ff;
-  color: #1e40af;
-  border-radius: 4px;
-  font-family: monospace;
-}
-
-.map-container {
-  flex: 1;
+/* ── Ambulance Markers ──────────────────────────────── */
+.map-marker-container {
   position: relative;
-  background-color: #f3f4f6;
-  overflow: hidden;
-}
-
-.map-placeholder {
-  width: 100%;
-  height: 100%;
-  background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
   display: flex;
   align-items: center;
   justify-content: center;
-  position: relative;
+  transform: translate(-50%, -50%);
 }
 
-.map-placeholder-content {
-  text-align: center;
+.ambulance-svg {
+  width: 32px;
+  height: 32px;
+  filter: drop-shadow(0 1px 3px rgba(0, 0, 0, 0.2));
+}
+
+.incident-svg {
+  width: 28px;
+  height: 28px;
+  filter: drop-shadow(0 1px 3px rgba(0, 0, 0, 0.2));
+}
+
+/* Status colors */
+.map-status-available { color: var(--status-available); }
+.map-status-dispatched { color: var(--status-dispatched); }
+.map-status-onscene { color: var(--status-onscene); }
+.map-status-returning { color: var(--status-returning); }
+
+/* Dispatched pulsing ring */
+.map-marker-dispatched::before {
+  content: '';
+  position: absolute;
+  width: 40px;
+  height: 40px;
+  border-radius: 50%;
+  border: 2px solid var(--accent-blue);
+  opacity: 0;
+  animation: pulse-ring 2s ease-out infinite;
+}
+
+/* Suggested pulsing ring */
+.map-marker-suggested::before {
+  content: '';
+  position: absolute;
+  width: 40px;
+  height: 40px;
+  border-radius: 50%;
+  border: 2px solid var(--priority-orange);
+  opacity: 0;
+  animation: pulse-ring 1.5s ease-out infinite;
+}
+
+/* ── InfoWindow ─────────────────────────────────────── */
+.map-iw {
+  font-family: var(--font-sans);
+  min-width: 220px;
+  padding: 4px 0;
+}
+
+.map-iw-label {
+  font-size: 11px;
+  font-weight: var(--weight-semibold);
+  color: var(--accent-blue);
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  margin-bottom: 6px;
+}
+
+.map-iw-vehicle {
+  font-size: 13px;
+  font-weight: var(--weight-bold);
+  color: var(--text-primary);
+  margin-bottom: 8px;
+  padding: 4px 8px;
+  background: var(--accent-blue-bg);
+  border-radius: var(--radius-md);
+}
+
+.map-iw-incident {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-bottom: 4px;
+}
+
+.map-iw-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  flex-shrink: 0;
+}
+
+.map-iw-type {
+  font-weight: var(--weight-bold);
+  font-size: 14px;
+  color: var(--text-primary);
+}
+
+.map-iw-priority {
+  font-size: 12px;
+  font-weight: var(--weight-semibold);
+  margin-bottom: 4px;
+}
+
+.map-iw-location {
+  font-size: 12px;
+  color: var(--text-secondary);
+  margin-bottom: 10px;
+}
+
+.map-iw-actions {
+  display: flex;
+  gap: 8px;
+}
+
+.map-iw-btn {
+  flex: 1;
+  padding: 8px 0;
+  border: none;
+  border-radius: var(--radius-md);
+  font-weight: var(--weight-semibold);
+  font-size: 13px;
+  cursor: pointer;
+  transition: opacity var(--transition-fast);
+}
+
+.map-iw-btn:hover { opacity: 0.9; }
+
+.map-iw-btn-accept {
+  background: var(--accent-green);
   color: white;
 }
 
-.map-icon {
-  font-size: 4rem;
-  margin-bottom: 1rem;
+.map-iw-btn-another {
+  background: var(--text-secondary);
+  color: white;
 }
 
-.map-placeholder-content p {
-  font-size: 1.25rem;
-  font-weight: 600;
-  margin-bottom: 0.5rem;
-}
-
-.map-subtitle {
-  font-size: 0.875rem;
-  opacity: 0.8;
-  font-weight: normal;
-}
-
-.vehicle-markers {
+/* ── Incident Tooltip ───────────────────────────────── */
+.map-incident-tooltip {
   position: absolute;
-  top: 0;
-  left: 0;
-  width: 100%;
-  height: 100%;
+  bottom: 100%;
+  left: 50%;
+  transform: translateX(-50%);
+  margin-bottom: 8px;
+  background: var(--surface-elevated);
+  border-radius: var(--radius-lg);
+  box-shadow: var(--shadow-lg);
+  padding: 10px 14px;
+  font-family: var(--font-sans);
+  min-width: 180px;
+  z-index: var(--z-dropdown);
+  pointer-events: none;
+  animation: fade-in var(--transition-fast);
 }
 
-.vehicle-marker {
-  position: absolute;
-  transform: translate(-50%, -50%);
-  cursor: pointer;
-}
-
-.marker-dot {
-  width: 16px;
-  height: 16px;
-  border-radius: 50%;
-  border: 2px solid white;
-  box-shadow: 0 2px 4px rgba(0, 0, 0, 0.3);
-}
-
-.vehicle-marker.vehicle-available .marker-dot {
-  background-color: #22c55e;
-}
-
-.vehicle-marker.vehicle-dispatched .marker-dot {
-  background-color: #ef4444;
-}
-
-.vehicle-marker.vehicle-offline .marker-dot {
-  background-color: #9ca3af;
-}
-
-.map-panel-sidebar {
-  padding: 1rem;
-  border-top: 1px solid #e0e0e0;
-  max-height: 250px;
-  overflow-y: auto;
-  background: white;
-}
-
-.vehicles-section h3,
-.assignment-section h3 {
-  font-size: 1rem;
-  font-weight: 600;
-  margin-bottom: 0.75rem;
-  color: #374151;
-}
-
-.vehicles-list {
+.map-it-header {
   display: flex;
-  flex-direction: column;
-  gap: 0.5rem;
-}
-
-.vehicle-item {
-  padding: 0.75rem;
-  border: 1px solid #e5e7eb;
-  border-radius: 6px;
-  background: white;
-}
-
-.vehicle-header {
-  display: flex;
-  justify-content: space-between;
   align-items: center;
-  margin-bottom: 0.5rem;
+  gap: 6px;
+  margin-bottom: 6px;
 }
 
-.vehicle-id {
-  font-family: monospace;
-  font-size: 0.875rem;
-  font-weight: 600;
+.map-it-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  flex-shrink: 0;
 }
 
-.vehicle-status {
-  padding: 0.125rem 0.5rem;
-  border-radius: 4px;
-  font-size: 0.7rem;
-  font-weight: 600;
-  text-transform: capitalize;
+.map-it-type {
+  font-weight: var(--weight-bold);
+  font-size: var(--text-base);
+  color: var(--text-primary);
 }
 
-.status-available {
-  background-color: #dcfce7;
-  color: #166534;
-}
-
-.status-dispatched {
-  background-color: #fee2e2;
-  color: #991b1b;
-}
-
-.status-offline {
-  background-color: #f3f4f6;
-  color: #374151;
-}
-
-.vehicle-info {
+.map-it-meta {
   display: flex;
-  flex-direction: column;
-  gap: 0.25rem;
-  font-size: 0.75rem;
-  color: #6b7280;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 4px;
 }
 
-.vehicle-type {
-  text-transform: capitalize;
+.map-it-priority {
+  font-size: var(--text-xs);
+  font-weight: var(--weight-semibold);
 }
 
-.assignment-section {
-  margin-top: 1rem;
-  padding-top: 1rem;
-  border-top: 1px solid #e5e7eb;
+.map-it-status {
+  font-size: 11px;
+  font-weight: var(--weight-semibold);
+  border-radius: var(--radius-full);
+  padding: 1px 8px;
+  background: var(--accent-blue-bg);
+  color: var(--accent-blue);
 }
 
-.assignment-details {
-  display: flex;
-  flex-direction: column;
-  gap: 0.5rem;
-}
-
-.assignment-item {
-  display: flex;
-  justify-content: space-between;
-  padding: 0.5rem;
-  background-color: #eff6ff;
-  border-radius: 4px;
-}
-
-.assignment-label {
-  font-weight: 600;
-  color: #1e40af;
-  font-size: 0.875rem;
-}
-
-.assignment-value {
-  font-size: 0.875rem;
-  color: #374151;
-}
-
-.empty-state {
-  padding: 1rem;
-  text-align: center;
-  color: #9ca3af;
-  font-style: italic;
-  font-size: 0.875rem;
-}
-
-/* MapPanel.css */
-
-/* 1. The Container - Places the icon on the map */
-.map-marker-container {
-    position: absolute;
-    transform: translate(-50%, -50%); /* Centers icon on the coords */
-    cursor: pointer;
-    display: flex;
-    flex-direction: column;
-    align-items: center;
-    z-index: 10;
-}
-
-/* 2. The SVG Icon Size */
-.ambulance-svg {
-    width: 50px;
-    height: 50px;
-    /* Adds a shadow so you can see it even if colors fail */
-    filter: drop-shadow(0 2px 4px rgba(0,0,0,0.4)); 
-}
-
-/* 3. Status Colors - THIS IS KEY */
-/* These set the text 'color', which the SVG uses for its 'fill' */
-/* Available - Green */
-.map-status-available { 
-    color: #2e994e; 
-}
-
-/* On-Scene - Red */
-.map-status-onscene { 
-    color: #d6455d; 
-}
-
-/* Returning - Purple */
-.map-status-returning { 
-    color: #3d69ff; 
-}
-
-/* Dispatched - Orange */
-.map-status-dispatched { 
-    color: #c87a1e; 
-}
-
-
-/* 4. Hover Effects */
-.map-marker-container:hover {
-    z-index: 100;
-    transform: translate(-50%, -60%) scale(1.15);
-}
-
-.marker-label {
-    background: rgba(0, 0, 0, 0.8);
-    color: white;
-    padding: 2px 6px;
-    border-radius: 4px;
-    font-size: 10px;
-    font-weight: bold;
-    margin-top: -5px;
-}
-
-/* Pulsing ring for dispatched ambulances */
-.map-marker-dispatched::before {
-    content: "";
-    position: absolute;
-    top: 50%;
-    left: 50%;
-    width: 60px;
-    height: 60px;
-    transform: translate(-50%, -55%);
-    border-radius: 50%;
-    border: 3px solid #2563eb;
-    animation: dispatch-pulse 1.5s ease-out infinite;
-    pointer-events: none;
-}
-
-/* Highlight ring for the suggested ambulance */
-.map-marker-suggested::after {
-    content: "";
-    position: absolute;
-    top: 50%;
-    left: 50%;
-    width: 65px;
-    height: 65px;
-    transform: translate(-50%, -55%);
-    border-radius: 50%;
-    border: 3px solid #e29a00;
-    animation: suggest-pulse 1s ease-out infinite;
-    pointer-events: none;
-}
-
-@keyframes dispatch-pulse {
-    0% { transform: translate(-50%, -55%) scale(0.8); opacity: 1; }
-    100% { transform: translate(-50%, -55%) scale(1.6); opacity: 0; }
-}
-
-@keyframes suggest-pulse {
-    0% { transform: translate(-50%, -55%) scale(0.9); opacity: 1; }
-    50% { transform: translate(-50%, -55%) scale(1.2); opacity: 0.5; }
-    100% { transform: translate(-50%, -55%) scale(0.9); opacity: 1; }
+.map-it-location {
+  font-size: var(--text-xs);
+  color: var(--text-secondary);
 }

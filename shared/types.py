@@ -36,10 +36,12 @@ class Suggestion(BaseModel):
     incident_code_category: Optional[str] = None  # e.g., "Cardiac"
     priority: Optional[str] = None  # MPDS priority: Purple/Red/Orange/Yellow/Green
     confidence: Optional[float] = None  # 0.0 - 1.0 match confidence
+    matched_evidence: Optional[List[dict]] = None  # [{keyword, score}] matched keywords
     # LLM-extracted location fields
     extracted_location: Optional[str] = None  # Street address / description from LLM
     extracted_lat: Optional[float] = None  # Geocoded latitude (via Nominatim)
     extracted_lon: Optional[float] = None  # Geocoded longitude (via Nominatim)
+    location_confidence: Optional[float] = None  # 0.0 - 1.0 LLM location confidence
 
 
 class Vehicle(BaseModel):

@@ -1,55 +1,58 @@
-// CaseCard.tsx
+import { MapPin, Clock, Truck } from "lucide-react";
+import { CaseInfo, PRIORITY_COLORS, PRIORITY_BGS, CasePriority } from "./types";
+import Badge from "./ui/Badge";
+import Button from "./ui/Button";
 import "./CasePanel.css";
-import { CaseInfo } from "./types";
 
 export type DispatchPhase =
-	| "finding"       // Server is searching for optimal ambulance
-	| "suggested"     // Dispatch suggestion shown on map, waiting for dispatcher
-	| "dispatched"    // Dispatcher accepted, ambulance dispatched
-	| "en_route"      // Ambulance following route
-	| "on_scene"      // Ambulance on scene
-	| "arrived"       // Ambulance arrived / incident resolved
-	| null;           // No active dispatch
+	| "finding"
+	| "suggested"
+	| "dispatched"
+	| "en_route"
+	| "on_scene"
+	| "arrived"
+	| null;
 
 export interface DispatchInfo {
 	phase: DispatchPhase;
 	vehicleId?: string;
 }
 
-// --- Helper for Colors ---
-const getPriorityColor = (p: string) => {
-	switch (p) {
-		case "Purple":
-			return "#884dff";
-		case "Red":
-			return "#d6455d";
-		case "Orange":
-			return "#e29a00";
-		case "Yellow":
-			return "#d4a700";
-		case "Green":
-			return "#2e994e";
-		default:
-			return "#000";
-	}
-};
+const DISPATCH_PHASES: { key: string; label: string }[] = [
+	{ key: "open", label: "Open" },
+	{ key: "dispatched", label: "Dispatched" },
+	{ key: "en_route", label: "En Route" },
+	{ key: "on_scene", label: "On Scene" },
+	{ key: "arrived", label: "Resolved" },
+];
 
-const statusLabel: Record<string, string> = {
+const STATUS_LABELS: Record<string, string> = {
 	open: "Open",
 	in_progress: "In Progress",
 	resolved: "Resolved",
 };
 
-const DISPATCH_PHASE_CONFIG: Record<string, { label: string; className: string }> = {
-	finding:    { label: "Finding Ambulance...", className: "dispatch-phase-finding" },
-	suggested:  { label: "Ambulance Suggested",  className: "dispatch-phase-suggested" },
-	dispatched: { label: "Dispatched",           className: "dispatch-phase-dispatched" },
-	en_route:   { label: "En Route",             className: "dispatch-phase-enroute" },
-	on_scene:   { label: "On Scene",             className: "dispatch-phase-onscene" },
-	arrived:    { label: "Arrived",              className: "dispatch-phase-arrived" },
-};
+function formatVehicleLabel(vehicleId: string): string {
+	return vehicleId.replace(/[-_]/g, " ").replace(/\b\w/g, (c) => c.toUpperCase());
+}
 
-// --- Props Interface ---
+function timeAgo(isoString: string | undefined): string {
+	if (!isoString) return "";
+	const diff = Date.now() - new Date(isoString).getTime();
+	const mins = Math.floor(diff / 60000);
+	if (mins < 1) return "Just now";
+	if (mins < 60) return `${mins}m ago`;
+	const hrs = Math.floor(mins / 60);
+	return `${hrs}h ${mins % 60}m ago`;
+}
+
+function getPhaseIndex(phase: DispatchPhase | undefined, status: string): number {
+	if (status === "resolved") return 4;
+	if (!phase) return 0;
+	const map: Record<string, number> = { finding: 0, suggested: 0, dispatched: 1, en_route: 2, on_scene: 3, arrived: 4 };
+	return map[phase] ?? 0;
+}
+
 interface CaseCardProps {
 	data: CaseInfo;
 	onDispatch?: (incidentId: string) => void;
@@ -57,83 +60,80 @@ interface CaseCardProps {
 	dispatchInfo?: DispatchInfo;
 }
 
-function formatTime(isoString: string | undefined): string {
-	if (!isoString) return "";
-	const d = new Date(isoString);
-	return d.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
-}
-
-function formatVehicleLabel(vehicleId: string): string {
-	return vehicleId
-		.replace(/[-_]/g, " ")
-		.replace(/\b\w/g, (c) => c.toUpperCase());
-}
-
-// --- The Component ---
 export default function CaseCard({ data, onDispatch, dispatchLoading, dispatchInfo }: CaseCardProps) {
 	const phase = dispatchInfo?.phase;
-	const phaseConfig = phase ? DISPATCH_PHASE_CONFIG[phase] : null;
+	const priority = data.priority as CasePriority;
+	const phaseIdx = getPhaseIndex(phase, data.status);
+	const showProgress = data.status !== "open" || phase;
 
 	return (
-		<div className="case-card">
-			{/* 1. WARNING ICON */}
-			<div className="warning-icon">
-				<span
-					className="material-icons icon_css"
-					style={{ color: getPriorityColor(data.priority) }}
-				>
-					warning
-				</span>
-			</div>
-
-			{/* 2. HEADER VISUALS */}
-			<div className="case-header-visuals">
-				<span className={`status-dot ${data.priority}`} />
-				<span className="case-type">{data.type}</span>
-			</div>
-
-			<div className={`case-status status-${data.priority}`}>
-				{data.priority}
-			</div>
-
-			{/* Status badge */}
-			<div className={`case-status-badge status-badge-${data.status}`}>
-				{statusLabel[data.status] || data.status}
-			</div>
-
-			{/* 3. CASE DETAILS */}
-			<div className="case-details-content">
-				<div className="case-row">
-					<span className="emoji">📍</span>
-					<span>{data.location}</span>
-				</div>
-				<div className="case-row">
-					<span className="emoji">🕒</span>
-					<span>Reported at {formatTime(data.reported_at)}</span>
+		<div className="cc-card" style={{ borderLeftColor: PRIORITY_COLORS[priority] }}>
+			{/* Row 1: Type + Badges */}
+			<div className="cc-row-top">
+				<span className="cc-type">{data.type}</span>
+				<div className="cc-badges">
+					<Badge
+						variant="priority"
+						size="sm"
+						dot
+						color={PRIORITY_COLORS[priority]}
+						bg={PRIORITY_BGS[priority]}
+					>
+						{priority}
+					</Badge>
+					<Badge
+						variant={data.status === "open" ? "info" : data.status === "in_progress" ? "warning" : "neutral"}
+						size="sm"
+					>
+						{STATUS_LABELS[data.status] || data.status}
+					</Badge>
 				</div>
 			</div>
 
-			{/* 4. DISPATCH STATUS */}
-			{phaseConfig && (
-				<div className={`dispatch-phase-indicator ${phaseConfig.className}`}>
-					<span className="dispatch-phase-label">{phaseConfig.label}</span>
-					{dispatchInfo?.vehicleId && (
-						<span className="dispatch-vehicle-label">
-							{formatVehicleLabel(dispatchInfo.vehicleId)}
-						</span>
-					)}
+			{/* Row 2: Location + Time */}
+			<div className="cc-details">
+				<div className="cc-detail">
+					<MapPin size={12} className="cc-detail-icon" />
+					<span>{data.location || "Unknown location"}</span>
+				</div>
+				<div className="cc-detail">
+					<Clock size={12} className="cc-detail-icon" />
+					<span>{timeAgo(data.reported_at)}</span>
+				</div>
+			</div>
+
+			{/* Progress Bar */}
+			{showProgress && (
+				<div className="cc-progress">
+					{DISPATCH_PHASES.map((p, i) => (
+						<div key={p.key} className={`cc-progress-step ${i <= phaseIdx ? "active" : ""} ${i === phaseIdx ? "current" : ""}`}>
+							<div className="cc-progress-dot" />
+							{i < DISPATCH_PHASES.length - 1 && <div className="cc-progress-line" />}
+						</div>
+					))}
 				</div>
 			)}
 
-			{/* 5. DISPATCH BUTTON (only when open and no active dispatch) */}
+			{/* Vehicle Assignment */}
+			{dispatchInfo?.vehicleId && (
+				<div className="cc-vehicle">
+					<Truck size={12} />
+					<span>{formatVehicleLabel(dispatchInfo.vehicleId)}</span>
+				</div>
+			)}
+
+			{/* Dispatch Button */}
 			{data.status === "open" && !phase && onDispatch && (
-				<button
-					className="dispatch-btn"
-					disabled={dispatchLoading}
+				<Button
+					variant="primary"
+					size="sm"
+					fullWidth
+					loading={dispatchLoading}
 					onClick={() => onDispatch(data.id)}
+					style={{ marginTop: 'var(--space-3)' }}
 				>
-					{dispatchLoading ? "Finding..." : "Dispatch"}
-				</button>
+					Dispatch
+				</Button>
 			)}
 		</div>
 	);

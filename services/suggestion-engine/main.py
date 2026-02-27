@@ -227,28 +227,32 @@ def geocode_location(address: str) -> tuple[float, float] | None:
 
 # ── ACR keyword matching (existing logic) ────────────────────────────────────
 
-def _score_code_against_text(text_lower: str, code_entry: dict) -> float:
+def _score_code_against_text(text_lower: str, code_entry: dict) -> tuple[float, list[dict]]:
     """
     Score how well a transcript matches a given ACR code entry.
 
     Multi-word phrases score higher than single-word matches to reward specificity.
-    Returns a float score where 0.0 means no match.
+    Returns (score, matched_evidence) where matched_evidence is a list of
+    {keyword, score} dicts for display in the frontend.
     """
     score = 0.0
     matched_keywords = 0
     total_keywords = len(code_entry["keywords"])
+    evidence = []
 
     for keyword in code_entry["keywords"]:
         if keyword in text_lower:
             matched_keywords += 1
             word_count = len(keyword.split())
-            score += word_count * 2.0
+            kw_score = word_count * 2.0
+            score += kw_score
+            evidence.append({"keyword": keyword, "score": round(kw_score, 2)})
 
     if matched_keywords == 0:
-        return 0.0
+        return 0.0, []
 
     coverage_bonus = (matched_keywords / total_keywords) * 1.0
-    return score + coverage_bonus
+    return score + coverage_bonus, evidence
 
 
 def generate_suggestions(transcript: Transcript) -> list[Suggestion]:
@@ -264,9 +268,9 @@ def generate_suggestions(transcript: Transcript) -> list[Suggestion]:
     for entry in ACR_PROBLEM_CODES:
         if entry["code"] in already_suggested:
             continue
-        score = _score_code_against_text(text_lower, entry)
+        score, evidence = _score_code_against_text(text_lower, entry)
         if score > 0:
-            scored.append((score, entry))
+            scored.append((score, entry, evidence))
 
     if not scored:
         return []
@@ -280,7 +284,7 @@ def generate_suggestions(transcript: Transcript) -> list[Suggestion]:
     suggestions = []
     seen_codes = set()
 
-    for score, entry in scored:
+    for score, entry, evidence in scored:
         if len(suggestions) >= MAX_SUGGESTIONS:
             break
 
@@ -305,6 +309,7 @@ def generate_suggestions(transcript: Transcript) -> list[Suggestion]:
             incident_code_category=entry["category"],
             priority=entry["default_priority"],
             confidence=confidence,
+            matched_evidence=evidence,
         ))
 
     # Record these codes so they won't be suggested again for this session
@@ -359,12 +364,15 @@ def _location_update_worker(
             f"'{extracted_location}' -> ({extracted_lat}, {extracted_lon})"
         )
 
+        location_confidence = llm_result.get("confidence", None)
+
         # Update ALL pending suggestions for this session
         suggestions = published_suggestions_by_session.get(session_id, [])
         for suggestion in suggestions:
             suggestion.extracted_location = extracted_location
             suggestion.extracted_lat = extracted_lat
             suggestion.extracted_lon = extracted_lon
+            suggestion.location_confidence = location_confidence
             _publish_suggestion(suggestion, producer)
             logger.info(
                 f"Published location update for suggestion {suggestion.id} "
