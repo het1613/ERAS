@@ -35,6 +35,7 @@ function vehicleToUnit(v: VehicleData): UnitInfo {
 const Dashboard = () => {
 	const [activeView, setActiveView] = useState<ActiveView>("Cases");
 	const [focusedUnit, setFocusedUnit] = useState<UnitInfo | null>(null);
+	const [focusedIncidentId, setFocusedIncidentId] = useState<string | null>(null);
 
 	const [hospitals, setHospitals] = useState<Hospital[]>([]);
 	const apiUrl = import.meta.env.VITE_API_URL || "http://localhost:8000";
@@ -164,6 +165,7 @@ const Dashboard = () => {
 							onDispatch={findBest}
 							dispatchLoading={dispatchLoading}
 							dispatchInfoMap={dispatchInfoMap}
+							focusedIncidentId={focusedIncidentId}
 						/>
 					) : (
 						<AmbulancePanel
@@ -187,6 +189,12 @@ const Dashboard = () => {
 					dispatchSuggestion={suggestion}
 					onAcceptSuggestion={accept}
 					onDeclineSuggestion={declineAndReassign}
+					onIncidentClick={(id) => {
+						setActiveView("Cases");
+						setFocusedIncidentId(id);
+					}}
+					onDispatch={findBest}
+					dispatchLoading={dispatchLoading}
 				/>
 			</div>
 		</div>
