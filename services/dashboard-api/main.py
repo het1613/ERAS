@@ -215,6 +215,23 @@ async def health_check():
     return {"status": "healthy", "service": "dashboard-api"}
 
 
+@app.get("/hospitals")
+async def list_hospitals():
+    """Return all hospitals from the DB."""
+    conn = get_connection()
+    try:
+        with conn.cursor() as cur:
+            cur.execute("SELECT id, name, lat, lon, address FROM hospitals ORDER BY id")
+            rows = cur.fetchall()
+            return [
+                {"id": r[0], "name": r[1], "lat": float(r[2]),
+                 "lon": float(r[3]), "address": r[4]}
+                for r in rows
+            ]
+    finally:
+        conn.close()
+
+
 # ---------------------------------------------------------------------------
 # Incident CRUD
 # ---------------------------------------------------------------------------
@@ -1064,12 +1081,23 @@ def process_vehicle_transporting_message(message_value: dict):
         finally:
             conn.close()
 
+        hospital_name = message_value.get("hospital_name")
+        hospital_lat = message_value.get("hospital_lat")
+        hospital_lon = message_value.get("hospital_lon")
+
         global event_loop
         if event_loop and event_loop.is_running():
+            broadcast_data = {"vehicle_id": vehicle_id, "incident_id": incident_id, "route": route}
+            if hospital_name:
+                broadcast_data["hospital_name"] = hospital_name
+            if hospital_lat is not None:
+                broadcast_data["hospital_lat"] = hospital_lat
+            if hospital_lon is not None:
+                broadcast_data["hospital_lon"] = hospital_lon
             asyncio.run_coroutine_threadsafe(
                 manager.broadcast({
                     "type": "vehicle_dispatched",
-                    "data": {"vehicle_id": vehicle_id, "incident_id": incident_id, "route": route},
+                    "data": broadcast_data,
                 }),
                 event_loop,
             )

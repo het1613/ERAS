@@ -65,8 +65,13 @@ class AssignmentSuggestion(BaseModel):
     """Represents a suggested vehicle assignment for an incident."""
     suggestion_id: str
     suggested_vehicle_id: str
-    route: str 
+    route: str
     timestamp: datetime
+    hospital_id: Optional[int] = None
+    hospital_name: Optional[str] = None
+    hospital_lat: Optional[float] = None
+    hospital_lon: Optional[float] = None
+    hospital_address: Optional[str] = None
 
 
 class VehicleDispatchEvent(BaseModel):
@@ -77,6 +82,9 @@ class VehicleDispatchEvent(BaseModel):
     incident_lon: float
     route: List[List[float]]  # List of [lat, lon] pairs
     timestamp: datetime
+    hospital_lat: Optional[float] = None
+    hospital_lon: Optional[float] = None
+    hospital_name: Optional[str] = None
 
 
 class VehicleArrivalEvent(BaseModel):
@@ -92,6 +100,9 @@ class VehicleTransportingEvent(BaseModel):
     incident_id: str
     route: List[List[float]]
     timestamp: datetime
+    hospital_lat: Optional[float] = None
+    hospital_lon: Optional[float] = None
+    hospital_name: Optional[str] = None
 
 
 class VehicleAtHospitalEvent(BaseModel):

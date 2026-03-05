@@ -30,7 +30,7 @@ audio-ingestion (:8001) --> kafka --> audio-processing --> kafka --> suggestion-
 
 ## Database
 
-PostgreSQL 15. Tables: `sessions`, `transcripts`, `suggestions`, `vehicles`, `incidents`, `dispatches`, `incident_events`.
+PostgreSQL 15. Tables: `sessions`, `transcripts`, `suggestions`, `vehicles`, `incidents`, `dispatches`, `incident_events`, `hospitals`.
 
 **All data is persisted to PostgreSQL.** Sessions, transcripts, and suggestions are written to DB on Kafka consumption. Only ephemeral vehicle statuses remain in-memory (they rebuild from live Kafka messages on restart).
 
@@ -52,6 +52,12 @@ The `incident_events` table is an audit log of every status transition:
 id (SERIAL PK), incident_id (FK), event_type, old_status, new_status, vehicle_id, timestamp, metadata (JSONB)
 ```
 
+The `hospitals` table stores hospital locations used by the optimizer and frontend:
+```
+id (SERIAL PK), name, lat, lon, address
+```
+Seeded in `init.sql` with 4 hospitals: St. Mary's General, Cambridge Memorial, Grand River Freeport Campus, Grand River Hospital. Exposed via `GET /hospitals` on dashboard-api.
+
 **Incident statuses:** `open` → `dispatched` → `en_route` → `on_scene` → `transporting` → `at_hospital` → `resolved`
 
 **Incident source:** `call_taker` (from suggestion acceptance or manual call-taker entry) or `manual` (from POST /incidents without source override). The dispatcher Cases tab only shows `call_taker` incidents.
@@ -68,15 +74,15 @@ Priority-to-weight mapping (auto-set when weight omitted): Purple=16, Red=8, Ora
 4. **List/Get:** `GET /incidents[?status=open&source=call_taker]`, `GET /incidents/{id}` on dashboard-api reads from DB.
 5. **Update:** `PATCH /incidents/{id}` on dashboard-api updates DB, logs to `incident_events`, broadcasts `incident_updated` over WebSocket.
 6. **Auto-Dispatch (server-side):** When call-taker accepts a suggestion or creates a manual call-taker incident, dashboard-api creates the incident AND immediately calls geospatial-dispatch `find-best`. The result is broadcast via a `dispatch_suggestion` WebSocket message.
-7. **Find-Best:** `POST /assignments/find-best` runs ILP optimizer, fetches OSRM route preview, returns suggestion. Accepts optional `exclude_vehicles` list. Does NOT change incident status. Stores route in `vehicle_assignments` for reuse on accept.
-8. **Accept:** `POST /assignments/{suggestion_id}/accept` marks vehicle as dispatched, publishes `vehicle-dispatches` Kafka event. Dashboard-api consumes the dispatch event and transitions incident to `dispatched`, sets `assigned_vehicle_id`, persists route in `dispatches` table.
+7. **Find-Best:** `POST /assignments/find-best` runs ILP optimizer (loads hospitals from DB via `get_hospitals_from_db()`), fetches OSRM route preview, returns suggestion including `hospital` object (id, name, lat, lon, address). Accepts optional `exclude_vehicles` list. Does NOT change incident status. Stores route + hospital in `vehicle_assignments` for reuse on accept.
+8. **Accept:** `POST /assignments/{suggestion_id}/accept` marks vehicle as dispatched, publishes `vehicle-dispatches` Kafka event (includes `hospital_lat/lon/name`). Dashboard-api consumes the dispatch event and transitions incident to `dispatched`, sets `assigned_vehicle_id`, persists route in `dispatches` table.
 9. **Decline:** `POST /assignments/{suggestion_id}/decline` removes suggestion from memory. No status changes.
 10. **Decline-and-Reassign:** `POST /assignments/{suggestion_id}/decline-and-reassign` declines the current suggestion, persists declined vehicle in `dispatch_metadata` JSONB, re-runs find-best with excluded vehicles.
 
 ### Full Case Lifecycle (via Kafka events from simulator):
 1. **dispatched** → Vehicle dispatched to scene (from `vehicle-dispatches` Kafka topic)
 2. **on_scene** → Vehicle arrived at scene (from `vehicle-arrivals` topic)
-3. **transporting** → Vehicle leaving scene heading to Grand River Hospital (from `vehicle-transporting` topic, includes OSRM route)
+3. **transporting** → Vehicle leaving scene heading to assigned hospital (from `vehicle-transporting` topic, includes OSRM route + `hospital_lat/lon/name`)
 4. **at_hospital** → Vehicle arrived at hospital (from `vehicle-at-hospital` topic)
 5. **resolved** → Case complete, vehicle returning to available (from `vehicle-resolved` topic)
 
@@ -98,7 +104,7 @@ Vehicles are initialized in-memory (`MOCK_VEHICLES` in geospatial-dispatch) but 
 
 When an assignment is accepted, geospatial-dispatch fetches a driving route from OSRM and publishes a `VehicleDispatchEvent` to `vehicle-dispatches`.
 
-**Hospital:** Grand River Hospital at 835 King St W, Kitchener, ON N2G 1G3 (43.455280, -80.505836). After on-scene time, the simulator fetches an OSRM route from the scene to the hospital and the ambulance follows it.
+**Hospitals:** Loaded dynamically from the `hospitals` DB table. The ILP optimizer (`optimization.py`) computes the nearest hospital per incident; geospatial-dispatch maps the optimizer's `hospital_id` index to DB metadata and includes it in the dispatch suggestion and `VehicleDispatchEvent`. The simulator carries hospital info through `dispatched → on_scene → transporting` state transitions and routes to the assigned hospital (falls back to Grand River Hospital if dispatch event lacks hospital fields).
 
 **Simulator** (`scripts/simulate_vehicle_locations.py`):
 - Full lifecycle: `available → dispatched → on_scene (30s) → transporting (to hospital) → at_hospital (20s) → returning (30s) → available`
@@ -110,14 +116,14 @@ When an assignment is accepted, geospatial-dispatch fetches a driving route from
 
 **Frontend call-taker & dispatch UI** (`frontend/src/`):
 - `components/CallTaker.tsx` — Call-taker screen. Shows live transcript, AI suggestions with editable fields, and a **Manual Incident Entry** card always at the top of AI Suggestions (creates incidents with `source='call_taker'` via `POST /incidents`).
-- `hooks/useDispatchSuggestion.ts` — manages active dispatch suggestion state.
-- `components/types.ts` — `CaseStatus` type includes all lifecycle statuses. `CaseInfo` includes `source` and `assigned_vehicle_id`.
+- `hooks/useDispatchSuggestion.ts` — manages active dispatch suggestion state. Parses `hospital` from suggestion data.
+- `components/types.ts` — `CaseStatus` type includes all lifecycle statuses. `CaseInfo` includes `source` and `assigned_vehicle_id`. `Hospital` interface. `DispatchSuggestion` includes optional `hospital`.
 - `components/CaseCard.tsx` — Shows full lifecycle progress bar: Open → Dispatched → En Route → On Scene → Transporting → At Hospital → Resolved. Shows assigned vehicle name.
 - `components/CasePanel.tsx` — "Active Cases" (non-resolved) and "Past Cases" (resolved, collapsible) sections.
-- `components/Dashboard.tsx` — Filters incidents to `source=call_taker` for the Cases tab. Builds `dispatchInfoMap` directly from incident status (status is granular enough).
-- `components/MapPanel.tsx` — Renders dispatch suggestions, routes, and ambulance markers.
+- `components/Dashboard.tsx` — Filters incidents to `source=call_taker` for the Cases tab. Builds `dispatchInfoMap` directly from incident status. Fetches `GET /hospitals` on mount and passes to `MapPanel`.
+- `components/MapPanel.tsx` — Renders dispatch suggestions (with hospital name), routes, ambulance markers, and dynamic hospital markers (from `hospitals` prop, no longer hardcoded).
 
-**Key types** in `shared/types.py`: `VehicleDispatchEvent`, `VehicleArrivalEvent`, `VehicleTransportingEvent`, `VehicleAtHospitalEvent`, `GRAND_RIVER_HOSPITAL`, `INCIDENT_STATUSES`.
+**Key types** in `shared/types.py`: `VehicleDispatchEvent` (includes optional `hospital_lat/lon/name`), `VehicleArrivalEvent`, `VehicleTransportingEvent` (includes optional `hospital_lat/lon/name`), `VehicleAtHospitalEvent`, `AssignmentSuggestion` (includes optional `hospital_id/name/lat/lon/address`), `GRAND_RIVER_HOSPITAL`, `INCIDENT_STATUSES`.
 
 **Graceful degradation**: if OSRM is unreachable, dispatch still succeeds but no route is published — vehicle falls back to random walk in the simulator.
 
@@ -141,9 +147,9 @@ Env vars (with defaults in docker-compose.yml):
 - `transcripts` — transcribed text from audio-processing
 - `suggestions` — AI suggestions from suggestion-engine
 - `vehicle-locations` — real-time GPS positions (produced by simulator, consumed by dashboard-api + geospatial-dispatch)
-- `vehicle-dispatches` — dispatch events with OSRM routes (produced by geospatial-dispatch on accept, consumed by simulator + dashboard-api)
+- `vehicle-dispatches` — dispatch events with OSRM routes + assigned hospital (produced by geospatial-dispatch on accept, consumed by simulator + dashboard-api)
 - `vehicle-arrivals` — arrival at scene events (produced by simulator, consumed by dashboard-api → sets `on_scene` + geospatial-dispatch)
-- `vehicle-transporting` — leaving scene heading to hospital (produced by simulator, consumed by dashboard-api → sets `transporting`)
+- `vehicle-transporting` — leaving scene heading to assigned hospital, includes `hospital_lat/lon/name` (produced by simulator, consumed by dashboard-api → sets `transporting`)
 - `vehicle-at-hospital` — arrived at hospital (produced by simulator, consumed by dashboard-api → sets `at_hospital`)
 - `vehicle-resolved` — case complete (produced by simulator, consumed by dashboard-api → sets `resolved` + geospatial-dispatch → resets vehicle to `available`)
 
@@ -185,12 +191,16 @@ curl -X POST http://localhost:8000/assignments/{suggestion_id}/decline-and-reass
 
 # Get active dispatch routes (persisted across restarts)
 curl http://localhost:8000/active-routes
+
+# List hospitals (dynamic, from DB)
+curl http://localhost:8000/hospitals
 ```
 
 ## Known Limitations / TODOs
 
 - Vehicle initial state is hardcoded (`MOCK_VEHICLES`); positions update live via Kafka but the roster itself isn't dynamic
 - Vehicle statuses in dashboard-api are still in-memory (ephemeral) — they rebuild from Kafka on restart, which is acceptable for real-time positions
+- Hospital roster is dynamic (from DB) but geospatial-dispatch queries the DB on every `find-best` call — could cache if performance matters
 - `on_event` startup/shutdown handlers are deprecated — should migrate to FastAPI lifespan
 - No authentication on any endpoint
 - ILP optimizer still uses Euclidean distance for assignment scoring; only post-accept routing uses OSRM

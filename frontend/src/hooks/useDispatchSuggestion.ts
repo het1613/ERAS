@@ -21,6 +21,7 @@ function parseSuggestionData(data: any): DispatchSuggestion {
 		incidentId: data.incident?.id || "",
 		incident: data.incident,
 		routePreview,
+		hospital: data.hospital || undefined,
 	};
 }
 

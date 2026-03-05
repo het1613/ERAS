@@ -25,6 +25,14 @@ export interface CaseInfo {
   updated_at: string;
 }
 
+export interface Hospital {
+  id: number;
+  name: string;
+  lat: number;
+  lon: number;
+  address?: string;
+}
+
 export interface DispatchSuggestion {
   suggestionId: string;
   vehicleId: string;
@@ -37,6 +45,7 @@ export interface DispatchSuggestion {
     lon: number;
   };
   routePreview: google.maps.LatLngLiteral[];
+  hospital?: Hospital;
 }
 
 export const PRIORITY_COLORS: Record<CasePriority, string> = {

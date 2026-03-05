@@ -84,10 +84,26 @@ MOCK_VEHICLES = [
     ),
 ]
 
-# Grand River Hospital (835 King St W, Kitchener, ON N2G 1G3)
-MOCK_HOSPITALS = np.array([
-    [43.455280, -80.505836],
-])
+def get_hospitals_from_db():
+    """Load hospitals from DB. Returns (np.array of coords, list of metadata dicts)."""
+    conn = get_connection()
+    try:
+        with conn.cursor() as cur:
+            cur.execute("SELECT id, name, lat, lon, address FROM hospitals ORDER BY id")
+            rows = cur.fetchall()
+            if not rows:
+                # Fallback to Grand River Hospital if DB is empty
+                return (
+                    np.array([[43.455280, -80.505836]]),
+                    [{"id": 0, "name": "Grand River Hospital", "lat": 43.455280,
+                      "lon": -80.505836, "address": "835 King St W, Kitchener, ON N2G 1G3"}],
+                )
+            coords = np.array([[float(r[2]), float(r[3])] for r in rows])
+            metadata = [{"id": r[0], "name": r[1], "lat": float(r[2]),
+                         "lon": float(r[3]), "address": r[4]} for r in rows]
+            return coords, metadata
+    finally:
+        conn.close()
 
 # Vehicle location tracker (updates positions from Kafka)
 vehicle_tracker = VehicleLocationTracker(MOCK_VEHICLES)
@@ -312,9 +328,12 @@ async def find_best_assignment(request: FindBestRequest):
     if not available_vehicles:
         raise HTTPException(status_code=503, detail="No available vehicles to assign")
 
+    # Load hospitals from DB
+    hospital_coords, hospital_metadata = get_hospitals_from_db()
+
     # Run the full optimization model on the current state
     dispatch_results = run_weighted_dispatch_with_hospitals(
-        available_vehicles, all_open_incidents, MOCK_HOSPITALS, verbose=True
+        available_vehicles, all_open_incidents, hospital_coords, verbose=True
     )
 
     # Find the assignment for our specific target incident
@@ -355,6 +374,10 @@ async def find_best_assignment(request: FindBestRequest):
             vehicle.lat, vehicle.lon, target_incident["lat"], target_incident["lon"]
         )
 
+    # Map optimizer hospital_id (index) to metadata
+    hospital_idx = assignment_for_target.get("hospital_id", 0)
+    hospital = hospital_metadata[hospital_idx] if hospital_idx < len(hospital_metadata) else hospital_metadata[0]
+
     # Generate a unique suggestion ID for this assignment suggestion
     suggestion_id = str(uuid.uuid4())
 
@@ -363,16 +386,22 @@ async def find_best_assignment(request: FindBestRequest):
         suggestion_id=suggestion_id,
         suggested_vehicle_id=vehicle_id,
         route=route_description,
-        timestamp=datetime.now()
+        timestamp=datetime.now(),
+        hospital_id=hospital["id"],
+        hospital_name=hospital["name"],
+        hospital_lat=hospital["lat"],
+        hospital_lon=hospital["lon"],
+        hospital_address=hospital.get("address"),
     )
 
     vehicle_assignments[suggestion_id] = {
         "suggestion": assignment_suggestion,
         "incident_id": request.incident_id,
         "route_preview": route_preview,
+        "hospital": hospital,
     }
 
-    logger.info(f"Generated globally-optimized assignment for suggestion {suggestion_id}: vehicle {vehicle_id}")
+    logger.info(f"Generated globally-optimized assignment for suggestion {suggestion_id}: vehicle {vehicle_id}, hospital {hospital['name']}")
 
     result = assignment_suggestion.model_dump()
     result["route_preview"] = route_preview
@@ -384,6 +413,7 @@ async def find_best_assignment(request: FindBestRequest):
         "lat": target_incident["lat"],
         "lon": target_incident["lon"],
     }
+    result["hospital"] = hospital
     return result
 
 
@@ -431,6 +461,7 @@ async def accept_assignment(suggestion_id: str):
         incident = get_incident_by_id(incident_id)
         if incident:
             route = entry.get("route_preview") or fetch_route_from_osrm(vehicle.lat, vehicle.lon, incident["lat"], incident["lon"])
+            hospital = entry.get("hospital", {})
             dispatch_event = VehicleDispatchEvent(
                 vehicle_id=vehicle.id,
                 incident_id=incident_id,
@@ -438,6 +469,9 @@ async def accept_assignment(suggestion_id: str):
                 incident_lon=incident["lon"],
                 route=route,
                 timestamp=datetime.now(),
+                hospital_lat=hospital.get("lat"),
+                hospital_lon=hospital.get("lon"),
+                hospital_name=hospital.get("name"),
             )
             if kafka_producer and route:
                 kafka_producer.send(

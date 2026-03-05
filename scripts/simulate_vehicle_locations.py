@@ -122,11 +122,17 @@ def dispatch_consumer_thread():
                         "route": deque(route),
                         "incident_id": incident_id,
                     }
+                hospital_lat = data.get("hospital_lat")
+                hospital_lon = data.get("hospital_lon")
+                hospital_name = data.get("hospital_name")
                 with state_lock:
                     vehicle_states[vehicle_id] = {
                         "status": "dispatched",
                         "incident_id": incident_id,
                         "timer": None,
+                        "hospital_lat": hospital_lat,
+                        "hospital_lon": hospital_lon,
+                        "hospital_name": hospital_name,
                     }
                 print(f"[DISPATCH] Received route for {vehicle_id}: {len(route)} waypoints")
             except Exception as e:
@@ -217,10 +223,14 @@ def main():
                             )
 
                             with state_lock:
+                                prev = vehicle_states.get(vid, {})
                                 vehicle_states[vid] = {
                                     "status": "on_scene",
                                     "incident_id": incident_id,
                                     "timer": now + ON_SCENE_DURATION_S,
+                                    "hospital_lat": prev.get("hospital_lat"),
+                                    "hospital_lon": prev.get("hospital_lon"),
+                                    "hospital_name": prev.get("hospital_name"),
                                 }
                             print(f"  [{vid}] ARRIVED AT SCENE — on_scene for {ON_SCENE_DURATION_S}s")
 
@@ -228,10 +238,14 @@ def main():
                     if state["timer"] and now >= state["timer"]:
                         incident_id = state["incident_id"]
 
-                        # Fetch route from current position to Grand River Hospital
+                        # Use assigned hospital from dispatch, fallback to Grand River
+                        h_lat = state.get("hospital_lat") or GRAND_RIVER_HOSPITAL["lat"]
+                        h_lon = state.get("hospital_lon") or GRAND_RIVER_HOSPITAL["lon"]
+                        h_name = state.get("hospital_name") or "Grand River Hospital"
+
+                        # Fetch route from current position to hospital
                         hospital_route = fetch_osrm_route(
-                            v["lat"], v["lon"],
-                            GRAND_RIVER_HOSPITAL["lat"], GRAND_RIVER_HOSPITAL["lon"],
+                            v["lat"], v["lon"], h_lat, h_lon,
                         )
 
                         # Publish transporting event
@@ -242,6 +256,9 @@ def main():
                                 "vehicle_id": vid,
                                 "incident_id": incident_id,
                                 "route": hospital_route,
+                                "hospital_lat": h_lat,
+                                "hospital_lon": h_lon,
+                                "hospital_name": h_name,
                                 "timestamp": datetime.now().isoformat(),
                             },
                         )
@@ -259,7 +276,7 @@ def main():
                                 "incident_id": incident_id,
                                 "timer": None,
                             }
-                        print(f"  [{vid}] ON_SCENE complete — TRANSPORTING to hospital ({len(hospital_route)} waypoints)")
+                        print(f"  [{vid}] ON_SCENE complete — TRANSPORTING to {h_name} ({len(hospital_route)} waypoints)")
 
                 elif status == "transporting":
                     with route_lock:

@@ -1,10 +1,10 @@
-import { useState, useMemo } from "react";
+import { useState, useMemo, useEffect } from "react";
 import { Truck, AlertTriangle } from "lucide-react";
 import MapPanel from "./MapPanel";
 import AmbulancePanel, { UnitInfo, VehicleData } from "./AmbulancePanel";
 import CasesPanel from "./CasePanel";
 import { DispatchInfo } from "./CaseCard";
-import { ActiveView } from "./types";
+import { ActiveView, Hospital } from "./types";
 import { useVehicleUpdates } from "../hooks/useVehicleUpdates";
 import { useIncidents } from "../hooks/useIncidents";
 import { useDispatchSuggestion } from "../hooks/useDispatchSuggestion";
@@ -35,6 +35,16 @@ function vehicleToUnit(v: VehicleData): UnitInfo {
 const Dashboard = () => {
 	const [activeView, setActiveView] = useState<ActiveView>("Cases");
 	const [focusedUnit, setFocusedUnit] = useState<UnitInfo | null>(null);
+
+	const [hospitals, setHospitals] = useState<Hospital[]>([]);
+	const apiUrl = import.meta.env.VITE_API_URL || "http://localhost:8000";
+
+	useEffect(() => {
+		fetch(`${apiUrl}/hospitals`)
+			.then((res) => res.json())
+			.then((data) => setHospitals(data))
+			.catch((err) => console.error("Failed to fetch hospitals:", err));
+	}, [apiUrl]);
 
 	const { vehicles, routes, incidentVehicleMap } = useVehicleUpdates();
 	const units = vehicles.map(vehicleToUnit);
@@ -173,6 +183,7 @@ const Dashboard = () => {
 					focusedUnit={focusedUnit}
 					routes={routes}
 					incidents={activeIncidents}
+					hospitals={hospitals}
 					dispatchSuggestion={suggestion}
 					onAcceptSuggestion={accept}
 					onDeclineSuggestion={declineAndReassign}
