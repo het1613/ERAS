@@ -87,6 +87,21 @@ CREATE TABLE IF NOT EXISTS incident_events (
     metadata JSONB
 );
 
+-- Hospitals table
+CREATE TABLE IF NOT EXISTS hospitals (
+    id SERIAL PRIMARY KEY,
+    name VARCHAR(255) NOT NULL,
+    lat DECIMAL(10, 8) NOT NULL,
+    lon DECIMAL(11, 8) NOT NULL,
+    address VARCHAR(500)
+);
+
+INSERT INTO hospitals (name, lat, lon, address) VALUES
+    ('St. Mary''s General Hospital', 43.43863840, -80.50070577, '911 Queen''s Blvd, Kitchener, ON N2M 1B2'),
+    ('Cambridge Memorial Hospital', 43.37850136, -80.32882889, '700 Coronation Blvd, Cambridge, ON N1R 3G2'),
+    ('Grand River Hospital Freeport Campus', 43.42630976, -80.40818941, '3570 King St E, Kitchener, ON N2G 2M1'),
+    ('Grand River Hospital', 43.45684165, -80.51168502, '835 King St W, Kitchener, ON N2G 1G3');
+
 -- Indexes
 CREATE INDEX IF NOT EXISTS idx_transcripts_session_id ON transcripts(session_id);
 CREATE INDEX IF NOT EXISTS idx_transcripts_timestamp ON transcripts(timestamp);
