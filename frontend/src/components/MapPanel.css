@@ -149,8 +149,31 @@
   font-family: var(--font-sans);
   min-width: 180px;
   z-index: var(--z-dropdown);
-  pointer-events: none;
+  pointer-events: auto;
   animation: fade-in var(--transition-fast);
+}
+
+.map-it-dispatch-btn {
+  width: 100%;
+  margin-top: 8px;
+  padding: 6px 0;
+  border: none;
+  border-radius: var(--radius-md);
+  background: #2563eb;
+  color: white;
+  font-weight: var(--weight-semibold);
+  font-size: 13px;
+  cursor: pointer;
+  transition: opacity var(--transition-fast);
+}
+
+.map-it-dispatch-btn:hover {
+  opacity: 0.9;
+}
+
+.map-it-dispatch-btn:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
 }
 
 .map-it-header {

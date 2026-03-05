@@ -1,4 +1,4 @@
-import { useMemo, useState } from "react";
+import { useMemo, useState, useRef, useEffect } from "react";
 import { ChevronDown } from "lucide-react";
 import CaseCard, { DispatchInfo } from "./CaseCard";
 import { CaseInfo, CasePriority, PRIORITY_COLORS, ActiveView } from "./types";
@@ -14,6 +14,7 @@ interface PanelProps {
 	onDispatch?: (incidentId: string) => void;
 	dispatchLoading?: boolean;
 	dispatchInfoMap?: Record<string, DispatchInfo>;
+	focusedIncidentId?: string | null;
 }
 
 export default function CasesPanel({
@@ -22,8 +23,10 @@ export default function CasesPanel({
 	onDispatch,
 	dispatchLoading,
 	dispatchInfoMap = {},
+	focusedIncidentId,
 }: PanelProps): JSX.Element {
 	const [showPast, setShowPast] = useState(true);
+	const caseListRef = useRef<HTMLDivElement>(null);
 
 	const { active, past, priorityCounts } = useMemo(() => {
 		const active: CaseInfo[] = [];
@@ -40,6 +43,10 @@ export default function CasesPanel({
 		}
 
 		active.sort((a, b) => {
+			if (focusedIncidentId) {
+				if (a.id === focusedIncidentId) return -1;
+				if (b.id === focusedIncidentId) return 1;
+			}
 			if (b.weight !== a.weight) return b.weight - a.weight;
 			return new Date(a.reported_at).getTime() - new Date(b.reported_at).getTime();
 		});
@@ -47,7 +54,13 @@ export default function CasesPanel({
 		past.sort((a, b) => new Date(b.updated_at).getTime() - new Date(a.updated_at).getTime());
 
 		return { active, past, priorityCounts: counts };
-	}, [incidents]);
+	}, [incidents, focusedIncidentId]);
+
+	useEffect(() => {
+		if (focusedIncidentId && caseListRef.current) {
+			caseListRef.current.scrollTo({ top: 0, behavior: "smooth" });
+		}
+	}, [focusedIncidentId]);
 
 	return (
 		<div className="dp-section">
@@ -69,7 +82,7 @@ export default function CasesPanel({
 				<span className="dp-section-title">Active Cases</span>
 				{active.length > 0 && <Badge variant="warning" size="sm">{active.length}</Badge>}
 			</div>
-			<div className="dp-case-list">
+			<div className="dp-case-list" ref={caseListRef}>
 				{loading ? (
 					<EmptyState title="Loading incidents..." />
 				) : active.length === 0 ? (
