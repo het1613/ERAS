@@ -31,6 +31,7 @@ RUN pip install --no-cache-dir --upgrade pip && \
 # If we run `python main.py` at /app, it works if shared is at /app/shared.
 
 COPY services/audio-processing/main.py /app/main.py
+COPY services/audio-processing/waterloo_keyterms.json /app/waterloo_keyterms.json
 
 # Run the service
 CMD ["python", "main.py"]
