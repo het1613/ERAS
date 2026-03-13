@@ -1,5 +1,9 @@
 """
 Audio Processing Service - Consumes audio chunks from Kafka, performs STT, and publishes transcripts.
+
+Toggle STT provider via STT_PROVIDER env var:
+  - "whisperx" (default) — local WhisperX inference
+  - "deepgram"           — Deepgram Nova-3 API (requires DEEPGRAM_API_KEY)
 """
 
 import os
@@ -12,15 +16,13 @@ import wave
 import io
 from datetime import datetime
 
-import whisperx
-import torch
 import numpy as np
 
 from shared.kafka_client import create_consumer, create_producer
 from shared.types import AudioChunk, Transcript
 
 # Add parent directory to path to access shared module
-# Since Dockerfile copies main.py to /app/main.py and shared to /app/shared, 
+# Since Dockerfile copies main.py to /app/main.py and shared to /app/shared,
 # and WORKDIR is /app, we don't need complicated path hacking if we run `python main.py`.
 # But for local dev compatibility:
 parent_dir = os.path.abspath(os.path.join(os.path.dirname(__file__), '../../'))
@@ -34,7 +36,10 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
-# Global model variables
+# STT provider toggle: "whisperx" or "deepgram"
+STT_PROVIDER = os.getenv("STT_PROVIDER", "whisperx").lower()
+
+# Global model variables (WhisperX)
 model = None
 model_a = None
 metadata = None
@@ -42,20 +47,42 @@ diarize_model = None
 device = "cpu" # Force CPU for now as requested
 compute_type = "int8" # quantize for CPU efficiency
 
+# Global Deepgram client
+deepgram_client = None
+deepgram_keywords = None
+
 def load_models():
-    """Load WhisperX models."""
-    global model, metadata, device, compute_type
-    
-    logger.info(f"Loading WhisperX model on {device} with {compute_type}...")
-    try:
-        # Load the model
-        model = whisperx.load_model("small.en", device, compute_type=compute_type)
-        logger.info("WhisperX model loaded successfully.")
-    except Exception as e:
-        logger.error(f"Failed to load WhisperX model: {e}")
-        # Continue without model for now (it will fail on processing) but don't crash loop yet
-        # or maybe we should raise to let orchestrator restart
-        raise
+    """Load STT models/clients based on STT_PROVIDER."""
+    global model, metadata, device, compute_type, deepgram_client, deepgram_keywords
+
+    if STT_PROVIDER == "deepgram":
+        from deepgram import DeepgramClient
+        api_key = os.getenv("DEEPGRAM_API_KEY")
+        if not api_key:
+            raise ValueError("DEEPGRAM_API_KEY env var is required when STT_PROVIDER=deepgram")
+        deepgram_client = DeepgramClient(api_key)
+
+        # Load regional keyterms for address recognition
+        keyterms_path = os.path.join(os.path.dirname(__file__), "waterloo_keyterms.json")
+        if os.path.exists(keyterms_path):
+            import json as _json
+            with open(keyterms_path) as f:
+                terms = _json.load(f)
+            deepgram_keywords = terms
+            logger.info(f"Loaded {len(deepgram_keywords)} Deepgram keywords from {keyterms_path}")
+        else:
+            logger.warning(f"Keyterms file not found at {keyterms_path}, proceeding without keywords")
+
+        logger.info("Deepgram client initialized (Nova-3).")
+    else:
+        import whisperx
+        logger.info(f"Loading WhisperX model on {device} with {compute_type}...")
+        try:
+            model = whisperx.load_model("small.en", device, compute_type=compute_type)
+            logger.info("WhisperX model loaded successfully.")
+        except Exception as e:
+            logger.error(f"Failed to load WhisperX model: {e}")
+            raise
 
 def create_wav_from_pcm(pcm_data: bytes, sample_rate: int = 16000, channels: int = 1, sample_width: int = 2) -> bytes:
     """
@@ -131,6 +158,55 @@ def audio_has_speech(audio: np.ndarray, threshold: float = 0.005) -> bool:
 # Global session context to store last transcript for continuity
 session_context = {}
 
+
+async def stt_deepgram(audio_chunk: AudioChunk) -> str:
+    """
+    Speech-to-Text using Deepgram Nova-2 API.
+    Sends pre-recorded audio and returns transcribed text.
+    """
+    from deepgram import PrerecordedOptions
+
+    if not deepgram_client:
+        logger.error("Deepgram client not initialized")
+        return ""
+
+    try:
+        audio_bytes = base64.b64decode(audio_chunk.chunk_data)
+
+        # Wrap raw PCM in WAV headers so Deepgram knows the format
+        if not is_valid_wav(audio_bytes):
+            audio_bytes = create_wav_from_pcm(audio_bytes, sample_rate=16000, channels=1, sample_width=2)
+
+        payload = {"buffer": audio_bytes}
+        options = PrerecordedOptions(
+            model="nova-3",
+            language="en",
+            smart_format=True,
+            numerals=True,
+            keyterm=deepgram_keywords or [],
+        )
+
+        response = deepgram_client.listen.rest.v("1").transcribe_file(payload, options)
+        transcript = (
+            response.results.channels[0].alternatives[0].transcript
+            if response.results.channels
+            else ""
+        )
+
+        if not transcript:
+            return ""
+
+        if is_hallucination(transcript):
+            logger.info(f"Filtered hallucinated transcript: '{transcript}'")
+            return ""
+
+        return transcript.strip()
+
+    except Exception as e:
+        logger.error(f"Deepgram STT Error: {e}", exc_info=True)
+        return ""
+
+
 async def stt(audio_chunk: AudioChunk, initial_prompt: str = "") -> str:
     """
     Speech-to-Text function using WhisperX (or underlying FasterWhisper).
@@ -169,6 +245,7 @@ async def stt(audio_chunk: AudioChunk, initial_prompt: str = "") -> str:
             
         try:
             # Load audio using WhisperX utility
+            import whisperx
             audio = whisperx.load_audio(temp_audio_path)
             
             # Check if audio has sufficient length (at least 0.5 second at 16kHz)
@@ -251,25 +328,26 @@ def process_audio_chunk(chunk_data: dict, producer: object) -> None:
 
         logger.info(f"Processing audio chunk for session: {audio_chunk.session_id}")
         
-        # Get context (last transcript) for this session.
-        # Use empty string as default - avoid domain-specific prompts that cause
-        # Whisper to hallucinate phrases like "A 911 emergency call" on silence.
-        last_context = session_context.get(audio_chunk.session_id, "")
-        
-        # STT transcription
-        # Use asyncio.run since we are in a sync loop
-        transcript_text = asyncio.run(stt(audio_chunk, initial_prompt=last_context))
+        # STT transcription — route to the configured provider
+        if STT_PROVIDER == "deepgram":
+            transcript_text = asyncio.run(stt_deepgram(audio_chunk))
+        else:
+            # Get context (last transcript) for this session.
+            # Use empty string as default - avoid domain-specific prompts that cause
+            # Whisper to hallucinate phrases like "A 911 emergency call" on silence.
+            last_context = session_context.get(audio_chunk.session_id, "")
+            transcript_text = asyncio.run(stt(audio_chunk, initial_prompt=last_context))
         
         if not transcript_text:
             logger.info("No speech detected.")
             return
 
-        # Update context for next chunk
-        # We keep the last ~200 chars to avoid prompt becoming too long
-        new_context = (last_context + " " + transcript_text).strip()
-        if len(new_context) > 200:
-            new_context = new_context[-200:]
-        session_context[audio_chunk.session_id] = new_context
+        # Update session context for WhisperX continuity (not used by Deepgram)
+        if STT_PROVIDER != "deepgram":
+            new_context = (last_context + " " + transcript_text).strip()
+            if len(new_context) > 200:
+                new_context = new_context[-200:]
+            session_context[audio_chunk.session_id] = new_context
 
         # Create transcript object
         transcript = Transcript(

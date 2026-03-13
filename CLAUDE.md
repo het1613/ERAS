@@ -145,6 +145,8 @@ Env vars (with defaults in docker-compose.yml):
 - `GEOSPATIAL_DISPATCH_URL` — internal URL for dashboard-api to reach geospatial-dispatch
 - `VITE_API_URL` — frontend API base URL (defaults to `http://localhost:8000`)
 - `TWILIO_STREAM_URL` — public WSS URL for Twilio Media Streams (set on audio-ingestion, e.g. `wss://<ngrok-subdomain>.ngrok-free.app/ws/twilio-stream`)
+- `STT_PROVIDER` — `whisperx` (default, local inference) or `deepgram` (Deepgram Nova-3 API). Set on audio-processing.
+- `DEEPGRAM_API_KEY` — required when `STT_PROVIDER=deepgram`. Get from https://console.deepgram.com
 
 ## Phone Call Integration (Twilio)
 
@@ -182,6 +184,18 @@ To avoid this, claim a free static domain at https://dashboard.ngrok.com/domains
 - Expect ~7-10 seconds end-to-end latency (vs 6-8 for browser) due to Twilio network hop
 - Only inbound caller audio is processed (`track="inbound_track"`)
 - Twilio free trial gives $15 credit; a Canadian number costs ~$1.15 CAD/month + ~$0.0085 USD/min incoming
+
+## Speech-to-Text (STT)
+
+Toggled via `STT_PROVIDER` env var in `.env` (loaded automatically by Docker Compose).
+
+**WhisperX** (`STT_PROVIDER=whisperx`, default): Local inference using `small.en` model on CPU with int8 quantization. No API key needed. Uses `initial_prompt` with rolling session context (~200 chars) for continuity across chunks.
+
+**Deepgram** (`STT_PROVIDER=deepgram`): Deepgram Nova-3 API. Requires `DEEPGRAM_API_KEY` in `.env` ($200 free credit on signup at https://console.deepgram.com). Options enabled: `smart_format`, `numerals` (converts spoken numbers to digits), `keyterm` (Waterloo region address boosting).
+
+**Keyterms:** `services/audio-processing/waterloo_keyterms.json` contains Waterloo region street/neighbourhood names loaded at startup and passed as `keyterm` to Deepgram Nova-3. Add entries to improve recognition of local addresses. No boost syntax — Nova-3 keyterms are plain strings.
+
+**Switching:** Set `STT_PROVIDER` in `.env` and rebuild: `docker compose up --build audio-processing`. Both providers output to the same Kafka `transcripts` topic with identical `Transcript` format.
 
 ## Kafka Topics
 
