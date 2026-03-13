@@ -215,6 +215,143 @@ async def websocket_endpoint(websocket: WebSocket):
         logger.info(f"Stream ended for session: {session_id}")
 
 
+@app.websocket("/ws/twilio-stream")
+async def twilio_stream_endpoint(websocket: WebSocket):
+    """
+    WebSocket endpoint for Twilio Media Streams.
+    Twilio sends JSON messages with base64-encoded mu-law 8kHz audio.
+    We convert to 16kHz PCM (matching the browser mic format) and publish to Kafka.
+    """
+    import audioop
+
+    if producer is None:
+        await websocket.close(code=1011, reason="Kafka producer not initialized")
+        return
+
+    await websocket.accept()
+    logger.info("Twilio Media Stream WebSocket connected")
+
+    session_id = str(uuid.uuid4())
+    call_sid = None
+    caller_number = None
+    sequence_number = 0
+    buffer = bytearray()
+    # Same 5-second chunk size as browser endpoint: 16kHz * 2 bytes * 5 sec
+    CHUNK_SIZE = 16000 * 2 * 5
+    # State for audioop.ratecv (maintains resampling continuity across calls)
+    ratecv_state = None
+
+    try:
+        while True:
+            message = await websocket.receive_text()
+            data = json.loads(message)
+            event_type = data.get("event")
+
+            if event_type == "connected":
+                logger.info(f"Twilio stream connected: {data}")
+
+            elif event_type == "start":
+                start_data = data.get("start", {})
+                call_sid = start_data.get("callSid")
+                caller_number = start_data.get("customParameters", {}).get("from") or start_data.get("from")
+                logger.info(f"Twilio stream started. CallSid: {call_sid}, Caller: {caller_number}, Session: {session_id}")
+
+            elif event_type == "media":
+                payload = data.get("media", {}).get("payload", "")
+                if not payload:
+                    continue
+
+                # Decode base64 mu-law audio from Twilio
+                mulaw_bytes = base64.b64decode(payload)
+                # Convert mu-law to 16-bit linear PCM
+                pcm_8khz = audioop.ulaw2lin(mulaw_bytes, 2)
+                # Resample 8kHz -> 16kHz
+                pcm_16khz, ratecv_state = audioop.ratecv(pcm_8khz, 2, 1, 8000, 16000, ratecv_state)
+
+                buffer.extend(pcm_16khz)
+
+                # Publish chunks at the same size as browser endpoint
+                while len(buffer) >= CHUNK_SIZE:
+                    chunk_bytes = bytes(buffer[:CHUNK_SIZE])
+                    buffer = buffer[CHUNK_SIZE:]
+
+                    chunk_b64 = base64.b64encode(chunk_bytes).decode('utf-8')
+                    chunk = AudioChunk(
+                        session_id=session_id,
+                        chunk_data=chunk_b64,
+                        timestamp=datetime.now(),
+                        sequence_number=sequence_number,
+                        call_source="phone",
+                        caller_number=caller_number,
+                    )
+
+                    chunk_dict = chunk.model_dump()
+                    chunk_dict['timestamp'] = chunk_dict['timestamp'].isoformat()
+                    producer.send("audio-chunks", chunk_dict)
+
+                    sequence_number += 1
+
+            elif event_type == "stop":
+                logger.info(f"Twilio stream stopped. CallSid: {call_sid}, Session: {session_id}")
+                break
+
+    except WebSocketDisconnect:
+        logger.info(f"Twilio WebSocket disconnected. CallSid: {call_sid}, Session: {session_id}")
+
+    except Exception as e:
+        logger.error(f"Error in Twilio stream: {e}", exc_info=True)
+        try:
+            await websocket.close(code=1011)
+        except Exception:
+            pass
+
+    finally:
+        # Flush remaining buffer if it has enough audio (~1.5 seconds)
+        MIN_REMAINING_BYTES = int(16000 * 2 * 1.5)
+        if len(buffer) >= MIN_REMAINING_BYTES:
+            chunk_b64 = base64.b64encode(bytes(buffer)).decode('utf-8')
+            chunk = AudioChunk(
+                session_id=session_id,
+                chunk_data=chunk_b64,
+                timestamp=datetime.now(),
+                sequence_number=sequence_number,
+                call_source="phone",
+                caller_number=caller_number,
+            )
+            chunk_dict = chunk.model_dump()
+            chunk_dict['timestamp'] = chunk_dict['timestamp'].isoformat()
+            producer.send("audio-chunks", chunk_dict)
+            producer.flush()
+        elif len(buffer) > 0:
+            logger.info(f"Discarding {len(buffer)} bytes of remaining Twilio audio (too short for reliable transcription)")
+
+        logger.info(f"Twilio stream ended. CallSid: {call_sid}, Session: {session_id}")
+
+
+@app.post("/twilio/voice")
+async def twilio_voice_webhook():
+    """
+    TwiML webhook for incoming Twilio calls.
+    Returns TwiML that plays a greeting and connects to the Media Stream.
+    Configure your Twilio phone number's Voice webhook to point here.
+    """
+    # Build the WebSocket URL for the Media Stream.
+    # In production, set TWILIO_STREAM_URL env var to your public WSS URL.
+    # With ngrok: wss://<ngrok-subdomain>.ngrok-free.app/ws/twilio-stream
+    stream_url = os.getenv("TWILIO_STREAM_URL", "wss://localhost:8001/ws/twilio-stream")
+
+    twiml = f"""<?xml version="1.0" encoding="UTF-8"?>
+<Response>
+    <Say voice="alice">You have reached the Emergency Response Assistance System. Please describe your emergency.</Say>
+    <Connect>
+        <Stream url="{stream_url}" track="inbound_track" />
+    </Connect>
+</Response>"""
+
+    from fastapi.responses import Response
+    return Response(content=twiml, media_type="application/xml")
+
+
 if __name__ == "__main__":
     import uvicorn
     uvicorn.run(app, host="0.0.0.0", port=8001)

@@ -13,6 +13,8 @@ class AudioChunk(BaseModel):
     chunk_data: str  # Base64 encoded or path to audio file for MVP (mocked)
     timestamp: datetime
     sequence_number: int
+    call_source: Optional[str] = None  # "browser" or "phone"
+    caller_number: Optional[str] = None  # Phone number for Twilio calls
 
 
 class Transcript(BaseModel):

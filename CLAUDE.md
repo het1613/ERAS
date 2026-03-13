@@ -15,6 +15,10 @@ dashboard-api (FastAPI, :8000)  <-- REST + WebSocket gateway, incident CRUD, Kaf
   +---> kafka (:9092 external / :29092 internal)
   |
 audio-ingestion (:8001) --> kafka --> audio-processing --> kafka --> suggestion-engine --> kafka --> dashboard-api
+
+Phone (PSTN) --> Twilio --> audio-ingestion /ws/twilio-stream (mu-law 8kHz → PCM 16kHz) ──┐
+Browser mic   --> Caller.tsx --> audio-ingestion /ws/stream                                ├──> Kafka "audio-chunks"
+                                                                                          ┘
 ```
 
 ## Key Directories
@@ -140,6 +144,44 @@ Env vars (with defaults in docker-compose.yml):
 - `KAFKA_BOOTSTRAP_SERVERS` — `kafka:29092` inside Docker, `localhost:9092` for local scripts
 - `GEOSPATIAL_DISPATCH_URL` — internal URL for dashboard-api to reach geospatial-dispatch
 - `VITE_API_URL` — frontend API base URL (defaults to `http://localhost:8000`)
+- `TWILIO_STREAM_URL` — public WSS URL for Twilio Media Streams (set on audio-ingestion, e.g. `wss://<ngrok-subdomain>.ngrok-free.app/ws/twilio-stream`)
+
+## Phone Call Integration (Twilio)
+
+Real phone callers can dial a Twilio number and have their call appear in the dashboard identically to browser-based audio. Both input methods coexist — phone sessions and browser sessions appear side by side.
+
+**How it works:** Caller dials Twilio number → Twilio opens a WebSocket to `audio-ingestion /ws/twilio-stream` → audio is converted from mu-law 8kHz to PCM 16kHz → published as `AudioChunk` to Kafka → same downstream pipeline as browser audio.
+
+**Audio conversion:** Twilio sends 8kHz mu-law (G.711) audio. The endpoint converts it to 16kHz 16-bit PCM using Python's `audioop` stdlib module (available in Python 3.10; use `audioop-lts` package if upgrading to 3.13+).
+
+**Endpoints added to audio-ingestion:**
+- `WS /ws/twilio-stream` — Handles Twilio Media Stream JSON protocol (`connected`, `start`, `media`, `stop` events)
+- `POST /twilio/voice` — Returns TwiML XML greeting + Media Stream connection. Used as the Twilio phone number's Voice webhook.
+
+**AudioChunk metadata:** `call_source` (`"phone"` or `None`) and `caller_number` fields are optional on `AudioChunk` in `shared/types.py`. Backward-compatible — downstream services ignore them if absent.
+
+### Setup
+
+Prerequisites: Twilio account with a phone number, ngrok installed and authenticated.
+
+1. **Start ngrok:** `ngrok http 8001` — copy the forwarding URL (e.g., `https://abc123.ngrok-free.app`)
+2. **Update `TWILIO_STREAM_URL`** in `docker-compose.yml` under `audio-ingestion` environment: `wss://<ngrok-url>/ws/twilio-stream`
+3. **Configure Twilio webhook:** In Twilio Console → Phone Numbers → your number → Voice Configuration → set "A call comes in" to Webhook, URL: `https://<ngrok-url>/twilio/voice`, Method: HTTP POST
+4. **Rebuild:** `docker compose up --build`
+5. **Call the number** — speech flows through to the CallTaker dashboard
+
+**Important: ngrok URL changes on every restart** (free plan). Each time you restart ngrok, you must:
+1. Update `TWILIO_STREAM_URL` in `docker-compose.yml` with the new URL
+2. Update the Twilio Voice webhook URL in the Twilio Console
+3. Rebuild: `docker compose up --build`
+
+To avoid this, claim a free static domain at https://dashboard.ngrok.com/domains and run `ngrok http 8001 --url=YOUR_STATIC_DOMAIN`.
+
+### Notes
+- Phone audio transcription quality is slightly lower than browser mic (8kHz vs 16kHz source)
+- Expect ~7-10 seconds end-to-end latency (vs 6-8 for browser) due to Twilio network hop
+- Only inbound caller audio is processed (`track="inbound_track"`)
+- Twilio free trial gives $15 credit; a Canadian number costs ~$1.15 CAD/month + ~$0.0085 USD/min incoming
 
 ## Kafka Topics
 

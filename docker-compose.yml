@@ -62,6 +62,7 @@ services:
       - "8001:8001"
     environment:
       KAFKA_BOOTSTRAP_SERVERS: kafka:29092
+      TWILIO_STREAM_URL: wss://susy-savourier-melvina.ngrok-free.dev/ws/twilio-stream
     depends_on:
       kafka:
         condition: service_healthy
