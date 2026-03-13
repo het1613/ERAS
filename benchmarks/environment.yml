@@ -1,0 +1,18 @@
+name: eras-bench
+channels:
+  - conda-forge
+  - defaults
+dependencies:
+  - python=3.11
+  - numpy
+  - pandas
+  - pydantic
+  - matplotlib
+  - pip
+  - pip:
+    - pulp
+    - httpx
+    - pytest
+    - pytest-benchmark
+    - pytest-asyncio
+    - tabulate

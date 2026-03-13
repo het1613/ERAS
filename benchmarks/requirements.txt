@@ -1,0 +1,10 @@
+pulp
+numpy
+pandas
+pydantic
+httpx
+pytest
+pytest-benchmark
+pytest-asyncio
+tabulate
+matplotlib
