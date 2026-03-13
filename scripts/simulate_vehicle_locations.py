@@ -25,6 +25,7 @@ from datetime import datetime
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
 
 from shared.kafka_client import create_producer, create_consumer
+from shared.db import get_connection
 
 LOCATION_TOPIC = "vehicle-locations"
 DISPATCH_TOPIC = "vehicle-dispatches"
@@ -37,13 +38,20 @@ GRAND_RIVER_HOSPITAL = {"lat": 43.455280, "lon": -80.505836}
 
 OSRM_BASE_URL = "https://router.project-osrm.org"
 
-VEHICLES = [
-    {"vehicle_id": "ambulance-1", "lat": 43.4723, "lon": -80.5449},
-    {"vehicle_id": "ambulance-2", "lat": 43.4515, "lon": -80.4925},
-    {"vehicle_id": "ambulance-3", "lat": 43.4643, "lon": -80.5204},
-    {"vehicle_id": "ambulance-4", "lat": 43.4583, "lon": -80.5025},
-    {"vehicle_id": "ambulance-5", "lat": 43.4553, "lon": -80.5165},
-]
+
+def load_vehicles_from_db():
+    """Load vehicles from the DB. Returns list of dicts with vehicle_id, lat, lon."""
+    conn = get_connection()
+    try:
+        with conn.cursor() as cur:
+            cur.execute("SELECT id, lat, lon FROM vehicles ORDER BY id")
+            rows = cur.fetchall()
+            return [
+                {"vehicle_id": r[0], "lat": float(r[1]), "lon": float(r[2])}
+                for r in rows
+            ]
+    finally:
+        conn.close()
 
 STEP_LAT = 0.00005
 STEP_LON = 0.00007
@@ -175,6 +183,24 @@ def get_vehicle_status(vid):
 
 
 def main():
+    # Load vehicles from DB with retry (postgres may still be starting)
+    VEHICLES = []
+    for attempt in range(10):
+        try:
+            VEHICLES = load_vehicles_from_db()
+            print(f"Loaded {len(VEHICLES)} vehicles from DB")
+            break
+        except Exception as e:
+            print(f"Failed to load vehicles from DB (attempt {attempt + 1}/10): {e}")
+            time.sleep(2)
+    else:
+        print("ERROR: Could not load vehicles from DB after 10 attempts. Exiting.")
+        return
+
+    if not VEHICLES:
+        print("ERROR: No vehicles found in DB. Exiting.")
+        return
+
     print(f"Creating Kafka producer for topic '{LOCATION_TOPIC}'...")
     producer = create_producer()
     print("Producer ready. Sending vehicle location updates every 2 seconds. Press Ctrl+C to stop.")
