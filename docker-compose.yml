@@ -170,9 +170,12 @@ services:
     container_name: eras-vehicle-simulator
     environment:
       KAFKA_BOOTSTRAP_SERVERS: kafka:29092
+      DATABASE_URL: postgresql://${POSTGRES_USER:-eras_user}:${POSTGRES_PASSWORD:-eras_pass}@postgres:5432/${POSTGRES_DB:-eras_db}
     depends_on:
       kafka:
         condition: service_healthy
+      postgres:
+        condition: service_started
     networks:
       - eras-network
 

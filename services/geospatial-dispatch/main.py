@@ -6,6 +6,7 @@ import os
 import math
 import logging
 import sys
+import time
 import uuid
 import threading
 from datetime import datetime
@@ -45,44 +46,30 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# Mock vehicle data
-MOCK_VEHICLES = [
-    Vehicle(
-        id="ambulance-1",
-        lat=43.4723,
-        lon=-80.5449,
-        status="available",
-        vehicle_type="ambulance",
-    ),
-    Vehicle(
-        id="ambulance-2",
-        lat=43.4515,
-        lon=-80.4925,
-        status="available",
-        vehicle_type="ambulance",
-    ),
-    Vehicle(
-        id="ambulance-3",
-        lat=43.4643,
-        lon=-80.5204,
-        status="available",
-        vehicle_type="ambulance",
-    ),
-    Vehicle(
-        id="ambulance-4",
-        lat=43.4583,
-        lon=-80.5025,
-        status="available",
-        vehicle_type="ambulance",
-    ),
-    Vehicle(
-        id="ambulance-5",
-        lat=43.4553,
-        lon=-80.5165,
-        status="available",
-        vehicle_type="ambulance",
-    ),
-]
+def load_vehicles_from_db():
+    """Load vehicles from the DB. Returns list of Vehicle objects."""
+    conn = get_connection()
+    try:
+        with conn.cursor() as cur:
+            cur.execute("SELECT id, lat, lon, status, vehicle_type FROM vehicles ORDER BY id")
+            rows = cur.fetchall()
+            if not rows:
+                logger.warning("No vehicles found in DB!")
+                return []
+            return [
+                Vehicle(
+                    id=r[0], lat=float(r[1]), lon=float(r[2]),
+                    status=r[3], vehicle_type=r[4],
+                )
+                for r in rows
+            ]
+    finally:
+        conn.close()
+
+
+# Vehicles list and tracker — initialized at startup from DB
+vehicles: list[Vehicle] = []
+vehicle_tracker: VehicleLocationTracker | None = None
 
 def get_hospitals_from_db():
     """Load hospitals from DB. Returns (np.array of coords, list of metadata dicts)."""
@@ -104,9 +91,6 @@ def get_hospitals_from_db():
             return coords, metadata
     finally:
         conn.close()
-
-# Vehicle location tracker (updates positions from Kafka)
-vehicle_tracker = VehicleLocationTracker(MOCK_VEHICLES)
 
 # Kafka producer for dispatch events
 kafka_producer = None
@@ -148,7 +132,7 @@ def lifecycle_consumer_thread():
                 vehicle_id = data.get("vehicle_id")
                 if not vehicle_id:
                     continue
-                vehicle = next((v for v in MOCK_VEHICLES if v.id == vehicle_id), None)
+                vehicle = next((v for v in vehicles if v.id == vehicle_id), None)
                 if not vehicle:
                     continue
 
@@ -173,8 +157,22 @@ def lifecycle_consumer_thread():
 
 @app.on_event("startup")
 async def startup_event():
-    global kafka_producer
+    global kafka_producer, vehicles, vehicle_tracker
     kafka_producer = create_producer()
+
+    # Load vehicles from DB with retry (postgres may still be starting)
+    for attempt in range(10):
+        try:
+            vehicles = load_vehicles_from_db()
+            logger.info(f"Loaded {len(vehicles)} vehicles from DB")
+            break
+        except Exception as e:
+            logger.warning(f"Failed to load vehicles from DB (attempt {attempt + 1}/10): {e}")
+            time.sleep(2)
+    else:
+        logger.error("Could not load vehicles from DB after 10 attempts")
+
+    vehicle_tracker = VehicleLocationTracker(vehicles)
     vehicle_tracker.start_consumer()
     threading.Thread(target=lifecycle_consumer_thread, daemon=True).start()
 
@@ -278,12 +276,12 @@ async def get_vehicles(status: Optional[str] = None):
         List of vehicles
     """
     vehicle_tracker.update_vehicle_positions()
-    vehicles = MOCK_VEHICLES
+    result = vehicles
     if status:
-        vehicles = [v for v in vehicles if v.status == status]
+        result = [v for v in vehicles if v.status == status]
 
     return {
-        "vehicles": [v.model_dump() for v in vehicles]
+        "vehicles": [v.model_dump() for v in result]
     }
 
 
@@ -299,7 +297,7 @@ async def get_vehicle(vehicle_id: str):
         Vehicle details
     """
     vehicle_tracker.update_vehicle_positions()
-    vehicle = next((v for v in MOCK_VEHICLES if v.id == vehicle_id), None)
+    vehicle = next((v for v in vehicles if v.id == vehicle_id), None)
     if not vehicle:
         raise HTTPException(status_code=404, detail="Vehicle not found")
 
@@ -324,7 +322,7 @@ async def find_best_assignment(request: FindBestRequest):
 
     # Get all currently available vehicles, excluding any the dispatcher has declined
     exclude_set = set(request.exclude_vehicles)
-    available_vehicles = [v for v in MOCK_VEHICLES if v.status == "available" and v.id not in exclude_set]
+    available_vehicles = [v for v in vehicles if v.status == "available" and v.id not in exclude_set]
     if not available_vehicles:
         raise HTTPException(status_code=503, detail="No available vehicles to assign")
 
@@ -367,7 +365,7 @@ async def find_best_assignment(request: FindBestRequest):
     )
 
     # Fetch route preview from OSRM
-    vehicle = next((v for v in MOCK_VEHICLES if v.id == vehicle_id), None)
+    vehicle = next((v for v in vehicles if v.id == vehicle_id), None)
     route_preview = []
     if vehicle:
         route_preview = fetch_route_from_osrm(
@@ -448,7 +446,7 @@ async def accept_assignment(suggestion_id: str):
     assignment = entry["suggestion"]
     incident_id = entry.get("incident_id")
 
-    vehicle = next((v for v in MOCK_VEHICLES if v.id == assignment.suggested_vehicle_id), None)
+    vehicle = next((v for v in vehicles if v.id == assignment.suggested_vehicle_id), None)
 
     if vehicle:
         vehicle.status = "dispatched"
@@ -488,10 +486,10 @@ async def accept_assignment(suggestion_id: str):
 @app.post("/admin/reset")
 async def admin_reset():
     """Reset all in-memory state: vehicles back to available, clear assignments."""
-    for vehicle in MOCK_VEHICLES:
+    for vehicle in vehicles:
         vehicle.status = "available"
     vehicle_assignments.clear()
-    vehicle_tracker.reset_positions(MOCK_VEHICLES)
+    vehicle_tracker.reset_positions(vehicles)
     logger.info("Admin reset: all vehicles available, assignments cleared")
     return {"status": "reset_complete"}
 
