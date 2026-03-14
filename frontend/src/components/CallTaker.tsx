@@ -128,6 +128,15 @@ const CallTaker: React.FC = () => {
     lon: '-80.5205',
     incident_code: '',
     priority: 'Yellow' as CasePriority,
+    age: '',
+    sex: '' as '' | 'Male' | 'Female',
+    isApartment: false,
+    apartmentNumber: '',
+    doorPin: '',
+    conscious: false,
+    breathing: false,
+    phoneNumber: '',
+    cautionNotes: '',
   });
   const [manualShowCoords, setManualShowCoords] = useState(false);
   const [manualEditingLocation, setManualEditingLocation] = useState(false);
@@ -481,7 +490,7 @@ const CallTaker: React.FC = () => {
         const err = await res.json().catch(() => ({}));
         throw new Error(err.detail || `HTTP ${res.status}`);
       }
-      setManualForm({ location: '', lat: '43.4643', lon: '-80.5205', incident_code: '', priority: 'Yellow' });
+      setManualForm({ location: '', lat: '43.4643', lon: '-80.5205', incident_code: '', priority: 'Yellow', age: '', sex: '', isApartment: false, apartmentNumber: '', doorPin: '', conscious: false, breathing: false, phoneNumber: '', cautionNotes: '' });
       setManualOpen(false);
       setManualShowCoords(false);
     } catch (error) {
@@ -749,6 +758,7 @@ const CallTaker: React.FC = () => {
               {manualOpen ? <ChevronUp size={14} /> : <ChevronDown size={14} />}
             </button>
             {manualOpen && (
+              <>
               <div className="ct-manual-body">
                 <div className="ct-card-fields">
                   {/* Location */}
@@ -898,28 +908,146 @@ const CallTaker: React.FC = () => {
                       </select>
                     </div>
                   </div>
+
+                  {/* Age */}
+                  <div className="ct-field">
+                    <div className="ct-field-label"><span>Age</span></div>
+                    <input
+                      type="number"
+                      className="ct-input ct-input-sm"
+                      placeholder="Age"
+                      min={0}
+                      max={150}
+                      value={manualForm.age}
+                      onChange={e => setManualForm(prev => ({ ...prev, age: e.target.value }))}
+                    />
+                  </div>
+
+                  {/* Sex */}
+                  <div className="ct-field">
+                    <div className="ct-field-label"><span>Sex</span></div>
+                    <div className="ct-checkbox-group">
+                      <label className="ct-checkbox-label">
+                        <input
+                          type="checkbox"
+                          checked={manualForm.sex === 'Male'}
+                          onChange={() => setManualForm(prev => ({ ...prev, sex: prev.sex === 'Male' ? '' : 'Male' }))}
+                        />
+                        <span>Male</span>
+                      </label>
+                      <label className="ct-checkbox-label">
+                        <input
+                          type="checkbox"
+                          checked={manualForm.sex === 'Female'}
+                          onChange={() => setManualForm(prev => ({ ...prev, sex: prev.sex === 'Female' ? '' : 'Female' }))}
+                        />
+                        <span>Female</span>
+                      </label>
+                    </div>
+                  </div>
+
+                  {/* Apartment */}
+                  <div className="ct-field">
+                    <div className="ct-field-label"><span>Apartment</span></div>
+                    <div className="ct-apartment-row">
+                      <label className="ct-checkbox-label">
+                        <input
+                          type="checkbox"
+                          checked={manualForm.isApartment}
+                          onChange={e => setManualForm(prev => ({ ...prev, isApartment: e.target.checked, apartmentNumber: e.target.checked ? prev.apartmentNumber : '', doorPin: e.target.checked ? prev.doorPin : '' }))}
+                        />
+                        <span>Yes</span>
+                      </label>
+                      {manualForm.isApartment && (
+                        <>
+                          <input
+                            type="text"
+                            className="ct-input ct-input-sm ct-apartment-input"
+                            placeholder="Apt #"
+                            value={manualForm.apartmentNumber}
+                            onChange={e => setManualForm(prev => ({ ...prev, apartmentNumber: e.target.value }))}
+                          />
+                          <input
+                            type="text"
+                            className="ct-input ct-input-sm ct-apartment-input"
+                            placeholder="Door PIN"
+                            value={manualForm.doorPin}
+                            onChange={e => setManualForm(prev => ({ ...prev, doorPin: e.target.value }))}
+                          />
+                        </>
+                      )}
+                    </div>
+                  </div>
+
+                  {/* Consciousness & Breathing */}
+                  <div className="ct-field">
+                    <div className="ct-field-label"><span>Patient Status</span></div>
+                    <div className="ct-checkbox-group">
+                      <label className="ct-checkbox-label">
+                        <input
+                          type="checkbox"
+                          checked={manualForm.conscious}
+                          onChange={e => setManualForm(prev => ({ ...prev, conscious: e.target.checked }))}
+                        />
+                        <span>Conscious</span>
+                      </label>
+                      <label className="ct-checkbox-label">
+                        <input
+                          type="checkbox"
+                          checked={manualForm.breathing}
+                          onChange={e => setManualForm(prev => ({ ...prev, breathing: e.target.checked }))}
+                        />
+                        <span>Breathing</span>
+                      </label>
+                    </div>
+                  </div>
+
+                  {/* Phone Number */}
+                  <div className="ct-field">
+                    <div className="ct-field-label"><span>Phone Number</span></div>
+                    <input
+                      type="tel"
+                      className="ct-input"
+                      placeholder="e.g. 519-555-1234"
+                      value={manualForm.phoneNumber}
+                      onChange={e => setManualForm(prev => ({ ...prev, phoneNumber: e.target.value }))}
+                    />
+                  </div>
+
+                  {/* Caution Notes */}
+                  <div className="ct-field">
+                    <div className="ct-field-label"><span>Caution Notes</span></div>
+                    <textarea
+                      className="ct-input ct-textarea"
+                      placeholder="Additional caution notes..."
+                      rows={3}
+                      value={manualForm.cautionNotes}
+                      onChange={e => setManualForm(prev => ({ ...prev, cautionNotes: e.target.value }))}
+                    />
+                  </div>
                 </div>
 
-                <div className="ct-card-actions">
-                  <Button
-                    variant="success"
-                    size="sm"
-                    icon={<Check size={13} />}
-                    onClick={handleManualSubmit}
-                    disabled={manualSubmitting}
-                    loading={manualSubmitting}
-                  >
-                    Create Incident
-                  </Button>
-                  <Button variant="ghost" size="sm" icon={<X size={13} />} onClick={() => setManualOpen(false)}>
-                    Cancel
-                  </Button>
-                </div>
               </div>
+              <div className="ct-manual-actions">
+                <Button
+                  variant="success"
+                  size="sm"
+                  icon={<Check size={13} />}
+                  onClick={handleManualSubmit}
+                  disabled={manualSubmitting}
+                  loading={manualSubmitting}
+                >
+                  Create Incident
+                </Button>
+                <Button variant="ghost" size="sm" icon={<X size={13} />} onClick={() => setManualOpen(false)}>
+                  Cancel
+                </Button>
+              </div>
+              </>
             )}
           </div>
 
-          {activeSuggestions.length === 0 && (
+          {activeSuggestions.length === 0 && !manualOpen && (
             <EmptyState title="Analyzing conversation..." description="AI suggestions will appear as patterns are detected." />
           )}
 
