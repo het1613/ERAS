@@ -618,15 +618,11 @@
 }
 
 .ct-code-dropdown {
-  position: absolute;
-  left: 0;
-  right: 0;
-  top: calc(100% + 4px);
+  position: fixed;
   z-index: var(--z-dropdown);
   display: flex;
   flex-direction: column;
   min-height: 120px;
-  max-height: 280px;
   background: var(--surface-elevated);
   border: 1px solid var(--border-default);
   border-radius: var(--radius-md);

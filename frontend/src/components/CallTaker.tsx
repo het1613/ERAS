@@ -102,6 +102,7 @@ const CallTaker: React.FC = () => {
   const [acrCodes, setAcrCodes] = useState<AcrCode[]>([]);
   const [codeSearchQuery, setCodeSearchQuery] = useState('');
   const [hoveredSuggestionId, setHoveredSuggestionId] = useState<string | null>(null);
+  const [codeDropdownStyle, setCodeDropdownStyle] = useState<React.CSSProperties>({});
 
   const [overrides, setOverrides] = useState<Record<string, {
     incident_code: string;
@@ -549,6 +550,34 @@ const CallTaker: React.FC = () => {
     });
   };
 
+  const suggestionsRef = useRef<HTMLDivElement>(null);
+
+  const openCodeDropdown = useCallback((id: string, triggerEl: HTMLElement) => {
+    const rect = triggerEl.getBoundingClientRect();
+    const panelRect = suggestionsRef.current?.getBoundingClientRect();
+    const bottomBound = panelRect ? panelRect.bottom - 12 : window.innerHeight - 12;
+    setCodeDropdownStyle({
+      top: rect.bottom + 4,
+      left: rect.left,
+      width: rect.width,
+      maxHeight: bottomBound - (rect.bottom + 4),
+    });
+    setOpenCodeDropdownId(prev => prev === id ? null : id);
+  }, []);
+
+  const openManualCodeDropdown = useCallback((triggerEl: HTMLElement) => {
+    const rect = triggerEl.getBoundingClientRect();
+    const panelRect = suggestionsRef.current?.getBoundingClientRect();
+    const bottomBound = panelRect ? panelRect.bottom - 12 : window.innerHeight - 12;
+    setCodeDropdownStyle({
+      top: rect.bottom + 4,
+      left: rect.left,
+      width: rect.width,
+      maxHeight: bottomBound - (rect.bottom + 4),
+    });
+    setManualCodeDropdownOpen(prev => !prev);
+  }, []);
+
   const activeTranscripts = selectedSessionId
     ? transcripts.filter(t => t.session_id === selectedSessionId).sort((a, b) => new Date(a.timestamp).getTime() - new Date(b.timestamp).getTime())
     : [];
@@ -700,7 +729,7 @@ const CallTaker: React.FC = () => {
       </div>
 
       {/* Right: AI Suggestions */}
-      <div className="ct-suggestions">
+      <div className="ct-suggestions" ref={suggestionsRef}>
         <div className="ct-suggestions-header">
           <BrainCircuit size={14} />
           <span>AI Suggestions</span>
@@ -780,7 +809,7 @@ const CallTaker: React.FC = () => {
                       <button
                         type="button"
                         className={`ct-code-trigger ${!manualForm.incident_code ? 'ct-code-trigger-placeholder' : ''}`}
-                        onClick={() => setManualCodeDropdownOpen(prev => !prev)}
+                        onClick={e => openManualCodeDropdown(e.currentTarget)}
                         aria-expanded={manualCodeDropdownOpen}
                         aria-haspopup="listbox"
                       >
@@ -795,7 +824,7 @@ const CallTaker: React.FC = () => {
                         <ChevronDown size={14} className="ct-code-trigger-icon" aria-hidden />
                       </button>
                       {manualCodeDropdownOpen && (
-                        <div className="ct-code-dropdown" role="listbox">
+                        <div className="ct-code-dropdown" role="listbox" style={codeDropdownStyle}>
                           <div className="ct-code-search">
                             <Search size={12} className="ct-code-search-icon" aria-hidden />
                             <input
@@ -1023,7 +1052,7 @@ const CallTaker: React.FC = () => {
                         <button
                           type="button"
                           className={`ct-code-trigger ${!override.incident_code ? 'ct-code-trigger-placeholder' : ''}`}
-                          onClick={() => setOpenCodeDropdownId(prev => prev === s.id ? null : s.id)}
+                          onClick={e => openCodeDropdown(s.id, e.currentTarget)}
                           aria-expanded={openCodeDropdownId === s.id}
                           aria-haspopup="listbox"
                         >
@@ -1038,7 +1067,7 @@ const CallTaker: React.FC = () => {
                           <ChevronDown size={14} className="ct-code-trigger-icon" aria-hidden />
                         </button>
                         {openCodeDropdownId === s.id && (
-                          <div className="ct-code-dropdown" role="listbox">
+                          <div className="ct-code-dropdown" role="listbox" style={codeDropdownStyle}>
                             <div className="ct-code-search">
                               <Search size={12} className="ct-code-search-icon" aria-hidden />
                               <input
