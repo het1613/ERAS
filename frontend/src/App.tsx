@@ -2,6 +2,7 @@ import { BrowserRouter, Routes, Route } from "react-router-dom";
 import Dashboard from "./components/Dashboard";
 import Caller from "./components/Caller";
 import CallTaker from "./components/CallTaker";
+import PastCases from "./components/PastCases";
 import NavBar from "./components/NavBar";
 import { WebSocketProvider } from "./contexts/WebSocketContext";
 import "./App.css";
@@ -17,6 +18,7 @@ function App() {
 							<Route path="/" element={<Dashboard />} />
 							<Route path="/caller" element={<Caller />} />
 							<Route path="/call-taker" element={<CallTaker />} />
+							<Route path="/past-cases" element={<PastCases />} />
 						</Routes>
 					</main>
 				</div>

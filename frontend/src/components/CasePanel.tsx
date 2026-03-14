@@ -1,5 +1,4 @@
-import { useMemo, useState, useRef, useEffect } from "react";
-import { ChevronDown } from "lucide-react";
+import { useMemo, useRef, useEffect } from "react";
 import CaseCard, { DispatchInfo } from "./CaseCard";
 import { CaseInfo, CasePriority, PRIORITY_COLORS, ActiveView } from "./types";
 import Badge from "./ui/Badge";
@@ -25,18 +24,14 @@ export default function CasesPanel({
 	dispatchInfoMap = {},
 	focusedIncidentId,
 }: PanelProps): JSX.Element {
-	const [showPast, setShowPast] = useState(true);
 	const caseListRef = useRef<HTMLDivElement>(null);
 
-	const { active, past, priorityCounts } = useMemo(() => {
+	const { active, priorityCounts } = useMemo(() => {
 		const active: CaseInfo[] = [];
-		const past: CaseInfo[] = [];
 		const counts: Partial<Record<CasePriority, number>> = {};
 
 		for (const c of incidents) {
-			if (c.status === "resolved") {
-				past.push(c);
-			} else {
+			if (c.status !== "resolved") {
 				active.push(c);
 				counts[c.priority] = (counts[c.priority] || 0) + 1;
 			}
@@ -51,9 +46,7 @@ export default function CasesPanel({
 			return new Date(a.reported_at).getTime() - new Date(b.reported_at).getTime();
 		});
 
-		past.sort((a, b) => new Date(b.updated_at).getTime() - new Date(a.updated_at).getTime());
-
-		return { active, past, priorityCounts: counts };
+		return { active, priorityCounts: counts };
 	}, [incidents, focusedIncidentId]);
 
 	useEffect(() => {
@@ -100,21 +93,6 @@ export default function CasesPanel({
 				)}
 			</div>
 
-			{/* Past Cases */}
-			<div className="dp-section-header dp-past-header">
-				<button className="dp-resolved-toggle" onClick={() => setShowPast(!showPast)}>
-					<ChevronDown size={14} style={{ transform: showPast ? 'rotate(0deg)' : 'rotate(-90deg)', transition: 'transform 150ms' }} />
-					<span className="dp-section-title">Past Cases</span>
-					<Badge variant="neutral" size="sm">{past.length}</Badge>
-				</button>
-			</div>
-			{showPast && past.length > 0 && (
-				<div className="dp-case-list dp-past-list">
-					{past.map(c => (
-						<CaseCard key={c.id} data={c} dispatchInfo={dispatchInfoMap[c.id]} />
-					))}
-				</div>
-			)}
 		</div>
 	);
 }

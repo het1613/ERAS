@@ -1,3 +1,4 @@
+import { useState, useEffect } from "react";
 import { MapPin, Clock, Truck } from "lucide-react";
 import { CaseInfo, CaseStatus, PRIORITY_COLORS, PRIORITY_BGS, CasePriority } from "./types";
 import Badge from "./ui/Badge";
@@ -54,14 +55,27 @@ function formatVehicleLabel(vehicleId: string): string {
 	return vehicleId.replace(/[-_]/g, " ").replace(/\b\w/g, (c) => c.toUpperCase());
 }
 
-function timeAgo(isoString: string | undefined): string {
+function parseUtc(iso: string): Date {
+	const s = iso.trim();
+	if (/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}/.test(s) && !s.endsWith('Z') && !/[-+]\d{2}:?\d{2}$/.test(s)) {
+		return new Date(s + 'Z');
+	}
+	return new Date(s);
+}
+
+function timeAgo(isoString: string | undefined, _tick?: number): string {
 	if (!isoString) return "";
-	const diff = Date.now() - new Date(isoString).getTime();
-	const mins = Math.floor(diff / 60000);
-	if (mins < 1) return "Just now";
-	if (mins < 60) return `${mins}m ago`;
+	const date = parseUtc(isoString);
+	const diff = Math.max(0, Date.now() - date.getTime());
+	const totalSecs = Math.floor(diff / 1000);
+	if (totalSecs < 60) return `${totalSecs}s ago`;
+	const mins = Math.floor(totalSecs / 60);
+	const secs = totalSecs % 60;
+	if (mins < 60) return `${mins}m ${secs}s ago`;
 	const hrs = Math.floor(mins / 60);
-	return `${hrs}h ${mins % 60}m ago`;
+	if (hrs < 24) return `${hrs}h ${mins % 60}m ${secs}s ago`;
+	const days = Math.floor(hrs / 24);
+	return `${days}d ago · ${date.toLocaleDateString("en-US", { month: "short", day: "numeric" })}`;
 }
 
 const PHASE_ORDER: Record<string, number> = {
@@ -85,6 +99,12 @@ interface CaseCardProps {
 }
 
 export default function CaseCard({ data, onDispatch, dispatchLoading, dispatchInfo }: CaseCardProps) {
+	const [tick, setTick] = useState(0);
+	useEffect(() => {
+		const id = setInterval(() => setTick(t => t + 1), 1000);
+		return () => clearInterval(id);
+	}, []);
+
 	const phase = dispatchInfo?.phase;
 	const priority = data.priority as CasePriority;
 	const phaseIdx = getPhaseIndex(phase, data.status);
@@ -123,7 +143,7 @@ export default function CaseCard({ data, onDispatch, dispatchLoading, dispatchIn
 				</div>
 				<div className="cc-detail">
 					<Clock size={12} className="cc-detail-icon" />
-					<span>{timeAgo(data.reported_at)}</span>
+					<span>{timeAgo(data.reported_at, tick)}</span>
 				</div>
 			</div>
 

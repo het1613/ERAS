@@ -1,6 +1,6 @@
 import { useState } from 'react';
 import { NavLink } from 'react-router-dom';
-import { LayoutDashboard, Headset, Phone, RotateCcw } from 'lucide-react';
+import { LayoutDashboard, Headset, Phone, RotateCcw, Archive } from 'lucide-react';
 import { useWebSocket } from '../contexts/WebSocketContext';
 import './NavBar.css';
 
@@ -8,6 +8,7 @@ const NAV_LINKS = [
   { to: '/caller', label: 'Caller', icon: Phone },
   { to: '/call-taker', label: 'Call Taker', icon: Headset },
   { to: '/', label: 'Dispatcher', icon: LayoutDashboard },
+  { to: '/past-cases', label: 'Past Cases', icon: Archive },
 ] as const;
 
 export default function NavBar() {
