@@ -561,6 +561,44 @@
   margin-bottom: 2px;
 }
 
+/* Checkbox group & apartment row */
+.ct-checkbox-group {
+  display: flex;
+  gap: var(--space-3);
+  align-items: center;
+}
+
+.ct-checkbox-label {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  font-size: var(--text-sm);
+  color: var(--text-secondary);
+  cursor: pointer;
+}
+
+.ct-checkbox-label input[type="checkbox"] {
+  accent-color: var(--accent-blue);
+  cursor: pointer;
+}
+
+.ct-apartment-row {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+}
+
+.ct-apartment-input {
+  flex: 1;
+  max-width: 100px;
+}
+
+.ct-textarea {
+  resize: vertical;
+  min-height: 40px;
+  font-family: inherit;
+}
+
 /* Incident code combobox */
 .ct-code-combobox {
   position: relative;
@@ -818,6 +856,9 @@
   border-radius: var(--radius-lg);
   overflow: hidden;
   transition: border-color var(--transition-fast), box-shadow var(--transition-fast);
+  display: flex;
+  flex-direction: column;
+  max-height: 95%;
 }
 
 .ct-manual-card-open {
@@ -867,6 +908,9 @@
 .ct-manual-body {
   padding: var(--space-4);
   animation: fade-in var(--transition-base);
+  overflow-y: auto;
+  flex: 1;
+  min-height: 0;
 }
 
 .ct-manual-body .ct-card-fields {
@@ -874,11 +918,15 @@
   padding-top: 0;
 }
 
-.ct-manual-body .ct-card-actions {
-  margin-top: var(--space-3);
-  padding-top: var(--space-3);
+.ct-manual-actions {
+  display: flex;
+  gap: var(--space-2);
+  padding: var(--space-3) var(--space-4);
   border-top: 1px solid var(--border-light);
+  flex-shrink: 0;
 }
+
+.ct-manual-actions .eras-btn { flex: 1; }
 
 /* Confirm Dialog Summary */
 .ct-confirm-summary {

@@ -294,7 +294,7 @@ export default function MapPanel({
 							style={{ position: "relative" }}
 						>
 							<div className="map-hospital-icon">
-								<svg width="28" height="28" viewBox="0 0 28 28" fill="none" xmlns="http://www.w3.org/2000/svg">
+								<svg width="20" height="20" viewBox="0 0 28 28" fill="none" xmlns="http://www.w3.org/2000/svg">
 									<rect width="28" height="28" rx="6" fill="#dc2626"/>
 									<rect x="2" y="2" width="24" height="24" rx="5" fill="white" stroke="#dc2626" strokeWidth="1.5"/>
 									<path d="M15.5 8H12.5V12.5H8V15.5H12.5V20H15.5V15.5H20V12.5H15.5V8Z" fill="#dc2626"/>
