@@ -99,7 +99,7 @@ OSRM_BASE_URL = "https://router.project-osrm.org"
 
 
 def fetch_route_from_osrm(origin_lat: float, origin_lon: float, dest_lat: float, dest_lon: float):
-    """Fetch a driving route from OSRM. Returns list of [lat, lon] pairs, or empty list on failure."""
+    """Fetch a driving route from OSRM. Returns (route, duration_seconds) tuple."""
     try:
         # OSRM expects lon,lat order
         url = f"{OSRM_BASE_URL}/route/v1/driving/{origin_lon},{origin_lat};{dest_lon},{dest_lat}?overview=full&geometries=geojson"
@@ -108,13 +108,15 @@ def fetch_route_from_osrm(origin_lat: float, origin_lon: float, dest_lat: float,
         data = resp.json()
         if data.get("code") != "Ok" or not data.get("routes"):
             logger.warning(f"OSRM returned no route: {data.get('code')}")
-            return []
+            return [], None
+        route_data = data["routes"][0]
         # GeoJSON coordinates are [lon, lat] — flip to [lat, lon]
-        coords = data["routes"][0]["geometry"]["coordinates"]
-        return [[c[1], c[0]] for c in coords]
+        coords = route_data["geometry"]["coordinates"]
+        duration = route_data.get("duration")  # seconds
+        return [[c[1], c[0]] for c in coords], duration
     except Exception as e:
         logger.error(f"OSRM route fetch failed: {e}")
-        return []
+        return [], None
 
 
 def lifecycle_consumer_thread():
@@ -367,8 +369,9 @@ async def find_best_assignment(request: FindBestRequest):
     # Fetch route preview from OSRM
     vehicle = next((v for v in vehicles if v.id == vehicle_id), None)
     route_preview = []
+    route_duration = None
     if vehicle:
-        route_preview = fetch_route_from_osrm(
+        route_preview, route_duration = fetch_route_from_osrm(
             vehicle.lat, vehicle.lon, target_incident["lat"], target_incident["lon"]
         )
 
@@ -412,6 +415,7 @@ async def find_best_assignment(request: FindBestRequest):
         "lon": target_incident["lon"],
     }
     result["hospital"] = hospital
+    result["duration_seconds"] = int(route_duration) if route_duration else None
     return result
 
 
@@ -458,7 +462,9 @@ async def accept_assignment(suggestion_id: str):
     if vehicle and incident_id:
         incident = get_incident_by_id(incident_id)
         if incident:
-            route = entry.get("route_preview") or fetch_route_from_osrm(vehicle.lat, vehicle.lon, incident["lat"], incident["lon"])
+            route = entry.get("route_preview")
+            if not route:
+                route, _ = fetch_route_from_osrm(vehicle.lat, vehicle.lon, incident["lat"], incident["lon"])
             hospital = entry.get("hospital", {})
             dispatch_event = VehicleDispatchEvent(
                 vehicle_id=vehicle.id,

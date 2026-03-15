@@ -22,6 +22,7 @@ function parseSuggestionData(data: any): DispatchSuggestion {
 		incident: data.incident,
 		routePreview,
 		hospital: data.hospital || undefined,
+		durationSeconds: data.duration_seconds || undefined,
 	};
 }
 

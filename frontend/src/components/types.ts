@@ -46,6 +46,7 @@ export interface DispatchSuggestion {
   };
   routePreview: google.maps.LatLngLiteral[];
   hospital?: Hospital;
+  durationSeconds?: number;
 }
 
 export const PRIORITY_COLORS: Record<CasePriority, string> = {

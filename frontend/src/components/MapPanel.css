@@ -49,6 +49,32 @@
   animation: pulse-ring 1.5s ease-out infinite;
 }
 
+/* Suggested ambulance pulsing highlight */
+.map-suggested-pulse {
+  position: absolute;
+  transform: translate(-50%, -50%);
+  pointer-events: none;
+}
+
+.map-suggested-pulse-ring {
+  width: 52px;
+  height: 52px;
+  border-radius: 50%;
+  border: 3px solid #ea580c;
+  animation: suggested-pulse 1.4s ease-out infinite;
+}
+
+@keyframes suggested-pulse {
+  0% {
+    transform: scale(1);
+    opacity: 0.8;
+  }
+  100% {
+    transform: scale(2.2);
+    opacity: 0;
+  }
+}
+
 /* ── InfoWindow ─────────────────────────────────────── */
 .map-iw {
   font-family: var(--font-sans);
@@ -104,6 +130,13 @@
 .map-iw-location {
   font-size: 12px;
   color: var(--text-secondary);
+  margin-bottom: 10px;
+}
+
+.map-iw-eta {
+  font-size: 13px;
+  font-weight: var(--weight-bold);
+  color: var(--accent-blue);
   margin-bottom: 10px;
 }
 
@@ -220,6 +253,16 @@
 .map-it-location {
   font-size: var(--text-xs);
   color: var(--text-secondary);
+}
+
+/* ── Dispatch Suggestion Panel ─────────────────────── */
+.map-dispatch-panel {
+  background: #ffffff;
+  border-radius: var(--radius-lg);
+  box-shadow: var(--shadow-lg);
+  padding: 12px 16px;
+  animation: fade-in var(--transition-fast);
+  pointer-events: auto;
 }
 
 /* ── Hospital Marker ────────────────────────────────── */
