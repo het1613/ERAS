@@ -98,6 +98,7 @@ interface MapPanelProps {
 	hospitals?: Hospital[];
 	dispatchSuggestion?: DispatchSuggestion | null;
 	onAcceptSuggestion?: () => void;
+	onCloseSuggestion?: () => void;
 	onDeclineSuggestion?: () => void;
 	onIncidentClick?: (incidentId: string) => void;
 	onDispatch?: (incidentId: string) => void;
@@ -116,6 +117,7 @@ export default function MapPanel({
 	hospitals = [],
 	dispatchSuggestion,
 	onAcceptSuggestion,
+	onCloseSuggestion,
 	onDeclineSuggestion,
 	onIncidentClick,
 	onDispatch,
@@ -179,43 +181,23 @@ export default function MapPanel({
 				);
 			})}
 
-				{/* Dispatch Suggestion InfoWindow */}
-				{dispatchSuggestion && (() => {
-					const suggestedUnit = units.find(
-						(u) => u.id.toLowerCase().replace(/\s+/g, "-") === dispatchSuggestion.vehicleId,
-					);
-					if (!suggestedUnit) return null;
-					const pos = parseCoords(suggestedUnit.coords);
-					const inc = dispatchSuggestion.incident;
-					const priorityColor = RAW_PRIORITY_COLORS[inc.priority as CasePriority] ?? "#888";
-					const vehicleLabel = formatVehicleLabel(dispatchSuggestion.vehicleId);
+				{/* Pulsing highlight on suggested ambulance */}
+			{dispatchSuggestion && (() => {
+				const suggestedUnit = units.find(
+					(u) => u.id.toLowerCase().replace(/\s+/g, "-") === dispatchSuggestion.vehicleId,
+				);
+				if (!suggestedUnit) return null;
+				const pos = parseCoords(suggestedUnit.coords);
+				return (
+					<OverlayView position={pos} mapPaneName={OverlayView.OVERLAY_MOUSE_TARGET}>
+						<div className="map-suggested-pulse">
+							<div className="map-suggested-pulse-ring" />
+						</div>
+					</OverlayView>
+				);
+			})()}
 
-					return (
-						<InfoWindow position={pos} options={{ pixelOffset: new google.maps.Size(0, -30) }} onCloseClick={onDeclineSuggestion}>
-							<div className="map-iw">
-								<div className="map-iw-label">Dispatch Suggestion</div>
-								<div className="map-iw-vehicle">{vehicleLabel}</div>
-								<div className="map-iw-incident">
-									<span className="map-iw-dot" style={{ backgroundColor: priorityColor }} />
-									<span className="map-iw-type">{inc.type}</span>
-								</div>
-								<div className="map-iw-priority" style={{ color: priorityColor }}>{inc.priority} Priority</div>
-								<div className="map-iw-location">{inc.location}</div>
-								{dispatchSuggestion.hospital && (
-									<div className="map-iw-location" style={{ fontStyle: "italic", marginTop: 2 }}>
-										→ {dispatchSuggestion.hospital.name}
-									</div>
-								)}
-								<div className="map-iw-actions">
-									<button className="map-iw-btn map-iw-btn-accept" onClick={onAcceptSuggestion}>Accept</button>
-									<button className="map-iw-btn map-iw-btn-another" onClick={onDeclineSuggestion}>Suggest Another</button>
-								</div>
-							</div>
-						</InfoWindow>
-					);
-				})()}
-
-				{/* Preview route (dashed orange) */}
+			{/* Preview route (dashed orange) */}
 				{dispatchSuggestion && dispatchSuggestion.routePreview.length > 0 && (
 					<Polyline key="preview-route" path={dispatchSuggestion.routePreview} options={previewPolylineOptions} />
 				)}
@@ -252,7 +234,7 @@ export default function MapPanel({
 							mapPaneName={OverlayView.OVERLAY_MOUSE_TARGET}
 						>
 							<div
-								style={{ position: "relative", transform: "translate(-50%, -100%)" }}
+								style={{ position: "relative", transform: "translate(-50%, calc(-100% - 34px))" }}
 								onMouseLeave={() => setHoveredIncidentId(null)}
 							>
 								<div className="map-incident-tooltip" style={{ position: "relative" }}>
@@ -280,8 +262,8 @@ export default function MapPanel({
 					);
 				})()}
 
-				{/* Hospital Markers */}
-				{hospitals.map((hospital) => (
+				{/* Hospital Markers (hidden when dispatch suggestion is active) */}
+				{!dispatchSuggestion && hospitals.map((hospital) => (
 					<OverlayView
 						key={`hospital-${hospital.id}`}
 						position={{ lat: hospital.lat, lng: hospital.lon }}
@@ -314,6 +296,88 @@ export default function MapPanel({
 						</div>
 					</OverlayView>
 				))}
+				{/* Dispatch Suggestion Popup — positioned above or below ambulance to avoid blocking route */}
+				{dispatchSuggestion && dispatchSuggestion.incident && (() => {
+					const suggestedUnit = units.find(
+						(u) => u.id.toLowerCase().replace(/\s+/g, "-") === dispatchSuggestion.vehicleId,
+					);
+					if (!suggestedUnit) return null;
+					const pos = parseCoords(suggestedUnit.coords);
+					const inc = dispatchSuggestion.incident;
+					const priorityColor = RAW_PRIORITY_COLORS[inc.priority as CasePriority] ?? "#888";
+					const vehicleLabel = formatVehicleLabel(dispatchSuggestion.vehicleId);
+
+					// If incident is above (north of) the ambulance, show popup below; otherwise above
+					const incidentAbove = Number(inc.lat) > pos.lat;
+
+					return (
+						<OverlayView
+							position={pos}
+							mapPaneName={OverlayView.OVERLAY_MOUSE_TARGET}
+						>
+							<div style={{
+								position: "relative",
+								transform: incidentAbove
+									? "translate(-50%, 20px)"
+									: "translate(-50%, calc(-100% - 20px))",
+							}}>
+								<div style={{
+									background: "#ffffff",
+									borderRadius: "12px",
+									boxShadow: "0 4px 24px rgba(0,0,0,0.18)",
+									padding: "12px 16px",
+									minWidth: "280px",
+									width: "max-content",
+									position: "relative",
+								}}>
+									<button
+										onClick={onCloseSuggestion}
+										style={{
+											position: "absolute",
+											top: 8,
+											right: 8,
+											background: "none",
+											border: "none",
+											cursor: "pointer",
+											fontSize: "18px",
+											color: "#888",
+											lineHeight: 1,
+											padding: "2px 6px",
+										}}
+										aria-label="Close"
+									>
+										×
+									</button>
+									<div className="map-iw">
+										<div className="map-iw-label">Dispatch Suggestion</div>
+										<div className="map-iw-vehicle">{vehicleLabel}</div>
+										<div className="map-iw-incident">
+											<span className="map-iw-dot" style={{ backgroundColor: priorityColor }} />
+											<span className="map-iw-type">{inc.type}</span>
+										</div>
+										<div className="map-iw-priority" style={{ color: priorityColor }}>{inc.priority} Priority</div>
+										<div className="map-iw-location">{inc.location}</div>
+										{dispatchSuggestion.hospital && (
+											<div className="map-iw-location" style={{ fontStyle: "italic", marginTop: 2 }}>
+												→ {dispatchSuggestion.hospital.name}
+											</div>
+										)}
+										{dispatchSuggestion.durationSeconds != null && (
+											<div className="map-iw-eta">
+												ETA: {Math.ceil(dispatchSuggestion.durationSeconds / 60)} min
+											</div>
+										)}
+										<div className="map-iw-actions">
+											<button className="map-iw-btn map-iw-btn-accept" onClick={onAcceptSuggestion}>Accept</button>
+											<button className="map-iw-btn map-iw-btn-another" onClick={onDeclineSuggestion}>Suggest Another</button>
+										</div>
+									</div>
+								</div>
+							</div>
+						</OverlayView>
+					);
+				})()}
+
 			</GoogleMap>
 		</div>
 	);

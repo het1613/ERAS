@@ -54,6 +54,7 @@ const Dashboard = () => {
 		loading: dispatchLoading,
 		findBest,
 		accept,
+		decline,
 		declineAndReassign,
 	} = useDispatchSuggestion();
 
@@ -188,6 +189,7 @@ const Dashboard = () => {
 					hospitals={hospitals}
 					dispatchSuggestion={suggestion}
 					onAcceptSuggestion={accept}
+					onCloseSuggestion={decline}
 					onDeclineSuggestion={declineAndReassign}
 					onIncidentClick={(id) => {
 						setActiveView("Cases");
