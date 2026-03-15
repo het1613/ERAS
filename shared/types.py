@@ -74,6 +74,11 @@ class AssignmentSuggestion(BaseModel):
     hospital_lat: Optional[float] = None
     hospital_lon: Optional[float] = None
     hospital_address: Optional[str] = None
+    is_reroute: bool = False
+    preempted_incident_id: Optional[str] = None
+    preempted_incident_priority: Optional[str] = None
+    preempted_incident_type: Optional[str] = None
+    preempted_incident_location: Optional[str] = None
 
 
 class VehicleDispatchEvent(BaseModel):

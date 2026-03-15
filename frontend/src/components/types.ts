@@ -47,6 +47,19 @@ export interface DispatchSuggestion {
   routePreview: google.maps.LatLngLiteral[];
   hospital?: Hospital;
   durationSeconds?: number;
+  isReroute?: boolean;
+  preemptedIncident?: {
+    id: string;
+    priority: string;
+    type: string;
+    location: string;
+  };
+  reassignment?: {
+    vehicleId: string;
+    incidentId: string;
+    routePreview: google.maps.LatLngLiteral[];
+    durationSeconds?: number;
+  };
 }
 
 export const PRIORITY_COLORS: Record<CasePriority, string> = {

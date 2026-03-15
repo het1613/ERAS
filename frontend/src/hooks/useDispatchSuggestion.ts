@@ -15,7 +15,8 @@ function parseSuggestionData(data: any): DispatchSuggestion {
 	const routePreview = (data.route_preview || []).map(
 		(point: [number, number]) => ({ lat: point[0], lng: point[1] })
 	);
-	return {
+
+	const result: DispatchSuggestion = {
 		suggestionId: data.suggestion_id,
 		vehicleId: data.suggested_vehicle_id,
 		incidentId: data.incident?.id || "",
@@ -24,6 +25,30 @@ function parseSuggestionData(data: any): DispatchSuggestion {
 		hospital: data.hospital || undefined,
 		durationSeconds: data.duration_seconds || undefined,
 	};
+
+	if (data.is_reroute) {
+		result.isReroute = true;
+		result.preemptedIncident = {
+			id: data.preempted_incident_id,
+			priority: data.preempted_incident_priority,
+			type: data.preempted_incident_type,
+			location: data.preempted_incident_location,
+		};
+	}
+
+	if (data.reassignment) {
+		const reassignRoutePreview = (data.reassignment.route_preview || []).map(
+			(point: [number, number]) => ({ lat: point[0], lng: point[1] })
+		);
+		result.reassignment = {
+			vehicleId: data.reassignment.vehicle_id,
+			incidentId: data.reassignment.incident_id,
+			routePreview: reassignRoutePreview,
+			durationSeconds: data.reassignment.duration_seconds || undefined,
+		};
+	}
+
+	return result;
 }
 
 export function useDispatchSuggestion(): UseDispatchSuggestionResult {

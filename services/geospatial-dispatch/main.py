@@ -140,13 +140,13 @@ def lifecycle_consumer_thread():
 
                 topic = message.topic
                 if topic == "vehicle-arrivals":
-                    vehicle.status = "dispatched"  # still occupied
+                    vehicle.status = "on_scene"
                     logger.info(f"Vehicle {vehicle_id} arrived at scene (on_scene)")
                 elif topic == "vehicle-transporting":
-                    vehicle.status = "dispatched"
+                    vehicle.status = "transporting"
                     logger.info(f"Vehicle {vehicle_id} transporting to hospital")
                 elif topic == "vehicle-at-hospital":
-                    vehicle.status = "dispatched"
+                    vehicle.status = "at_hospital"
                     logger.info(f"Vehicle {vehicle_id} at hospital")
                 elif topic == "vehicle-resolved":
                     vehicle.status = "available"
@@ -198,11 +198,15 @@ def get_open_incidents():
         with conn.cursor() as cur:
             placeholders = ','.join(['%s'] * len(ACTIVE_INCIDENT_STATUSES))
             cur.execute(
-                f"SELECT id, lat, lon, weight, status FROM incidents WHERE status IN ({placeholders})",
+                f"SELECT id, lat, lon, weight, status, assigned_vehicle_id, type, priority, location FROM incidents WHERE status IN ({placeholders})",
                 ACTIVE_INCIDENT_STATUSES,
             )
             rows = cur.fetchall()
-            return [{"id": r[0], "lat": float(r[1]), "lon": float(r[2]), "weight": r[3], "status": r[4]} for r in rows]
+            return [{
+                "id": r[0], "lat": float(r[1]), "lon": float(r[2]), "weight": r[3],
+                "status": r[4], "assigned_vehicle_id": r[5], "type": r[6],
+                "priority": r[7], "location": r[8],
+            } for r in rows]
     finally:
         conn.close()
 
@@ -310,7 +314,8 @@ async def get_vehicle(vehicle_id: str):
 async def find_best_assignment(request: FindBestRequest):
     """
     Find the best vehicle for an incident (by ID), considering the current global state.
-    Reads the target incident and all other open incidents from DB.
+    Considers both available and dispatched vehicles. If the optimizer assigns a dispatched
+    vehicle (reroute), the response includes preempted incident info and a reassignment vehicle.
     """
     vehicle_tracker.update_vehicle_positions()
 
@@ -322,25 +327,33 @@ async def find_best_assignment(request: FindBestRequest):
     # Get all open incidents from DB for full optimization context
     all_open_incidents = get_open_incidents()
 
-    # Get all currently available vehicles, excluding any the dispatcher has declined
+    # Eligible vehicles: available + dispatched (NOT on_scene/transporting/at_hospital)
     exclude_set = set(request.exclude_vehicles)
-    available_vehicles = [v for v in vehicles if v.status == "available" and v.id not in exclude_set]
-    if not available_vehicles:
-        raise HTTPException(status_code=503, detail="No available vehicles to assign")
+    eligible_vehicles = [v for v in vehicles if v.status in ("available", "dispatched") and v.id not in exclude_set]
+    if not eligible_vehicles:
+        raise HTTPException(status_code=503, detail="No available or reroutable vehicles to assign")
+
+    # Build current_assignments map: {vehicle_id: incident_dict} for dispatched vehicles
+    current_assignments = {}
+    for inc in all_open_incidents:
+        if inc["status"] == "dispatched" and inc.get("assigned_vehicle_id"):
+            current_assignments[inc["assigned_vehicle_id"]] = inc
+
+    # Optimizable incidents: open + dispatched (assignable states)
+    optimizable_incidents = [inc for inc in all_open_incidents if inc["status"] in ("open", "dispatched")]
 
     # Load hospitals from DB
     hospital_coords, hospital_metadata = get_hospitals_from_db()
 
     # Run the full optimization model on the current state
     dispatch_results = run_weighted_dispatch_with_hospitals(
-        available_vehicles, all_open_incidents, hospital_coords, verbose=True
+        eligible_vehicles, optimizable_incidents, hospital_coords, verbose=True
     )
 
     # Find the assignment for our specific target incident
     assignment_for_target = None
-    # Build index mapping: find the index of our target incident in the all_open_incidents list
     target_index = None
-    for idx, inc in enumerate(all_open_incidents):
+    for idx, inc in enumerate(optimizable_incidents):
         if inc["id"] == request.incident_id:
             target_index = idx
             break
@@ -357,17 +370,66 @@ async def find_best_assignment(request: FindBestRequest):
     if not assignment_for_target:
         raise HTTPException(status_code=404, detail="Could not find a suitable assignment for the incident.")
 
-    vehicle_id = assignment_for_target["ambulance_id"]
+    primary_vehicle_id = assignment_for_target["ambulance_id"]
 
-    # Generate a simple route description for the assignment
+    # Detect reroute: is the assigned vehicle currently dispatched to another case?
+    is_reroute = primary_vehicle_id in current_assignments
+    preempted_incident = current_assignments.get(primary_vehicle_id) if is_reroute else None
+
+    # Build reassignment info if this is a reroute
+    reassignment_info = None
+    if is_reroute and preempted_incident:
+        # Find the optimizer's assignment for the preempted incident
+        preempted_index = None
+        for idx, inc in enumerate(optimizable_incidents):
+            if inc["id"] == preempted_incident["id"]:
+                preempted_index = idx
+                break
+
+        reassignment_assignment = None
+        if preempted_index is not None:
+            for round_summary in dispatch_results.get("rounds", []):
+                for assignment in round_summary.get("assignments", []):
+                    if assignment["incident_id"] == preempted_index and assignment["ambulance_id"] != primary_vehicle_id:
+                        reassignment_assignment = assignment
+                        break
+                if reassignment_assignment:
+                    break
+
+        if reassignment_assignment:
+            reassignment_vehicle_id = reassignment_assignment["ambulance_id"]
+            reassignment_vehicle = next((v for v in vehicles if v.id == reassignment_vehicle_id), None)
+
+            # Fetch OSRM route for reassignment vehicle -> preempted incident
+            reassign_route = []
+            reassign_duration = None
+            if reassignment_vehicle:
+                reassign_route, reassign_duration = fetch_route_from_osrm(
+                    reassignment_vehicle.lat, reassignment_vehicle.lon,
+                    preempted_incident["lat"], preempted_incident["lon"]
+                )
+
+            # Hospital for preempted incident
+            reassign_hospital_idx = reassignment_assignment.get("hospital_id", 0)
+            reassign_hospital = hospital_metadata[reassign_hospital_idx] if reassign_hospital_idx < len(hospital_metadata) else hospital_metadata[0]
+
+            reassignment_info = {
+                "vehicle_id": reassignment_vehicle_id,
+                "incident_id": preempted_incident["id"],
+                "route_preview": reassign_route,
+                "duration_seconds": int(reassign_duration) if reassign_duration else None,
+                "hospital": reassign_hospital,
+            }
+
+    # Generate route description
     route_description = (
-        f"Optimized route for {vehicle_id} to incident at "
+        f"Optimized route for {primary_vehicle_id} to incident at "
         f"(lat: {target_incident['lat']:.4f}, lon: {target_incident['lon']:.4f}). "
         f"Total unweighted distance: {assignment_for_target['unweighted_dist']:.2f} km."
     )
 
-    # Fetch route preview from OSRM
-    vehicle = next((v for v in vehicles if v.id == vehicle_id), None)
+    # Fetch route preview from OSRM for primary vehicle -> target incident
+    vehicle = next((v for v in vehicles if v.id == primary_vehicle_id), None)
     route_preview = []
     route_duration = None
     if vehicle:
@@ -379,13 +441,13 @@ async def find_best_assignment(request: FindBestRequest):
     hospital_idx = assignment_for_target.get("hospital_id", 0)
     hospital = hospital_metadata[hospital_idx] if hospital_idx < len(hospital_metadata) else hospital_metadata[0]
 
-    # Generate a unique suggestion ID for this assignment suggestion
+    # Generate a unique suggestion ID
     suggestion_id = str(uuid.uuid4())
 
-    # Create and store the assignment suggestion
+    # Create the assignment suggestion with reroute fields
     assignment_suggestion = AssignmentSuggestion(
         suggestion_id=suggestion_id,
-        suggested_vehicle_id=vehicle_id,
+        suggested_vehicle_id=primary_vehicle_id,
         route=route_description,
         timestamp=datetime.now(),
         hospital_id=hospital["id"],
@@ -393,6 +455,11 @@ async def find_best_assignment(request: FindBestRequest):
         hospital_lat=hospital["lat"],
         hospital_lon=hospital["lon"],
         hospital_address=hospital.get("address"),
+        is_reroute=is_reroute,
+        preempted_incident_id=preempted_incident["id"] if preempted_incident else None,
+        preempted_incident_priority=preempted_incident.get("priority") if preempted_incident else None,
+        preempted_incident_type=preempted_incident.get("type") if preempted_incident else None,
+        preempted_incident_location=preempted_incident.get("location") if preempted_incident else None,
     )
 
     vehicle_assignments[suggestion_id] = {
@@ -400,9 +467,12 @@ async def find_best_assignment(request: FindBestRequest):
         "incident_id": request.incident_id,
         "route_preview": route_preview,
         "hospital": hospital,
+        "is_reroute": is_reroute,
+        "reassignment": reassignment_info,
+        "preempted_incident": preempted_incident,
     }
 
-    logger.info(f"Generated globally-optimized assignment for suggestion {suggestion_id}: vehicle {vehicle_id}, hospital {hospital['name']}")
+    logger.info(f"Generated {'reroute' if is_reroute else 'normal'} assignment for suggestion {suggestion_id}: vehicle {primary_vehicle_id}, hospital {hospital['name']}")
 
     result = assignment_suggestion.model_dump()
     result["route_preview"] = route_preview
@@ -416,6 +486,8 @@ async def find_best_assignment(request: FindBestRequest):
     }
     result["hospital"] = hospital
     result["duration_seconds"] = int(route_duration) if route_duration else None
+    if reassignment_info:
+        result["reassignment"] = reassignment_info
     return result
 
 
@@ -436,12 +508,8 @@ async def get_assignment(suggestion_id: str):
 async def accept_assignment(suggestion_id: str):
     """
     Accept a vehicle assignment (mark vehicle as dispatched).
-
-    Args:
-        suggestion_id: Suggestion identifier
-
-    Returns:
-        Confirmation message
+    For reroutes: publishes two dispatch events (primary + reassignment) and
+    validates that the rerouted vehicle hasn't progressed past dispatched.
     """
     if suggestion_id not in vehicle_assignments:
         raise HTTPException(status_code=404, detail="Assignment not found")
@@ -449,16 +517,24 @@ async def accept_assignment(suggestion_id: str):
     entry = vehicle_assignments[suggestion_id]
     assignment = entry["suggestion"]
     incident_id = entry.get("incident_id")
+    is_reroute = entry.get("is_reroute", False)
+    reassignment_info = entry.get("reassignment")
 
     vehicle = next((v for v in vehicles if v.id == assignment.suggested_vehicle_id), None)
 
+    # Race condition check: if reroute, verify vehicle hasn't progressed past dispatched
+    if is_reroute and vehicle and vehicle.status not in ("available", "dispatched"):
+        del vehicle_assignments[suggestion_id]
+        raise HTTPException(
+            status_code=409,
+            detail=f"Vehicle {vehicle.id} has progressed to '{vehicle.status}' and can no longer be rerouted"
+        )
+
     if vehicle:
         vehicle.status = "dispatched"
-        logger.info(f"Accepted assignment for suggestion {suggestion_id}: vehicle {vehicle.id} dispatched")
+        logger.info(f"Accepted {'reroute' if is_reroute else 'normal'} assignment for suggestion {suggestion_id}: vehicle {vehicle.id} dispatched")
 
-    # Dashboard-api transitions incident status via the vehicle-dispatches Kafka event
-
-    # Use pre-fetched route if available, otherwise fetch from OSRM
+    # Publish primary dispatch event: primary_vehicle -> target_incident
     if vehicle and incident_id:
         incident = get_incident_by_id(incident_id)
         if incident:
@@ -485,6 +561,44 @@ async def accept_assignment(suggestion_id: str):
                 )
                 kafka_producer.flush()
                 logger.info(f"Published dispatch event for {vehicle.id} with {len(route)} waypoints")
+
+    # If reroute, publish second dispatch event: reassignment_vehicle -> preempted_incident
+    if is_reroute and reassignment_info:
+        reassign_vehicle_id = reassignment_info["vehicle_id"]
+        reassign_incident_id = reassignment_info["incident_id"]
+        reassign_vehicle = next((v for v in vehicles if v.id == reassign_vehicle_id), None)
+
+        if reassign_vehicle:
+            reassign_vehicle.status = "dispatched"
+
+        preempted_incident = get_incident_by_id(reassign_incident_id)
+        if preempted_incident and reassign_vehicle:
+            reassign_route = reassignment_info.get("route_preview", [])
+            if not reassign_route:
+                reassign_route, _ = fetch_route_from_osrm(
+                    reassign_vehicle.lat, reassign_vehicle.lon,
+                    preempted_incident["lat"], preempted_incident["lon"]
+                )
+            reassign_hospital = reassignment_info.get("hospital", {})
+            reassign_dispatch_event = VehicleDispatchEvent(
+                vehicle_id=reassign_vehicle.id,
+                incident_id=reassign_incident_id,
+                incident_lat=preempted_incident["lat"],
+                incident_lon=preempted_incident["lon"],
+                route=reassign_route,
+                timestamp=datetime.now(),
+                hospital_lat=reassign_hospital.get("lat"),
+                hospital_lon=reassign_hospital.get("lon"),
+                hospital_name=reassign_hospital.get("name"),
+            )
+            if kafka_producer and reassign_route:
+                kafka_producer.send(
+                    "vehicle-dispatches",
+                    key=reassign_vehicle.id.encode("utf-8"),
+                    value=reassign_dispatch_event.model_dump(mode="json"),
+                )
+                kafka_producer.flush()
+                logger.info(f"Published reassignment dispatch event for {reassign_vehicle.id} -> incident {reassign_incident_id}")
 
     return {"status": "accepted", "suggestion_id": suggestion_id, "vehicle_id": assignment.suggested_vehicle_id}
 

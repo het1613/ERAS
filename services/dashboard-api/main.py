@@ -970,10 +970,21 @@ def process_vehicle_dispatch_message(message_value: dict):
                     row = cur.fetchone()
                     if row:
                         old_status = row[0]
+                        # Detect reroute reassignment: incident was dispatched but getting a different vehicle
+                        cur.execute("SELECT assigned_vehicle_id FROM incidents WHERE id=%s", (incident_id,))
+                        avrow = cur.fetchone()
+                        old_assigned_vehicle = avrow[0] if avrow else None
+                        is_reassignment = (old_status == "dispatched" and old_assigned_vehicle
+                                           and old_assigned_vehicle != vehicle_id)
                         cur.execute(
                             "UPDATE incidents SET status='dispatched', assigned_vehicle_id=%s, updated_at=CURRENT_TIMESTAMP WHERE id=%s",
                             (vehicle_id, incident_id))
-                        _log_incident_event(conn, incident_id, "status_change", old_status, "dispatched", vehicle_id)
+                        if is_reassignment:
+                            _log_incident_event(conn, incident_id, "reroute_reassigned", old_status, "dispatched", vehicle_id,
+                                                metadata={"old_vehicle_id": old_assigned_vehicle})
+                            logger.info(f"Reroute reassignment: incident {incident_id} reassigned from {old_assigned_vehicle} to {vehicle_id}")
+                        else:
+                            _log_incident_event(conn, incident_id, "status_change", old_status, "dispatched", vehicle_id)
                 conn.commit()
 
                 with conn.cursor() as cur:
