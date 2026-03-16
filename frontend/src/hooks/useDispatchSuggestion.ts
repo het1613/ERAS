@@ -125,6 +125,13 @@ export function useDispatchSuggestion(): UseDispatchSuggestionResult {
 				{ method: "POST" }
 			);
 			if (!res.ok) throw new Error(`HTTP ${res.status}`);
+			// Clear declined_vehicles so future dispatches for this incident start fresh
+			await fetch(
+				`${apiUrl}/incidents/${suggestion.incidentId}/clear-declined`,
+				{ method: "POST" }
+			).catch((err) =>
+				console.error("Failed to clear declined vehicles:", err)
+			);
 		} catch (err) {
 			console.error("Failed to decline assignment:", err);
 		} finally {
