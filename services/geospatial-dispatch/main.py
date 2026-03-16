@@ -328,8 +328,12 @@ async def find_best_assignment(request: FindBestRequest):
     all_open_incidents = get_open_incidents()
 
     # Eligible vehicles: available + dispatched (NOT on_scene/transporting/at_hospital)
+    # "dispatched" in geospatial-dispatch covers both "Dispatched" and "En Route" on the frontend
     exclude_set = set(request.exclude_vehicles)
     eligible_vehicles = [v for v in vehicles if v.status in ("available", "dispatched") and v.id not in exclude_set]
+    dispatched_eligible = [v.id for v in eligible_vehicles if v.status == "dispatched"]
+    available_eligible = [v.id for v in eligible_vehicles if v.status == "available"]
+    logger.info(f"find-best: {len(available_eligible)} available + {len(dispatched_eligible)} dispatched/en-route vehicles eligible. Dispatched: {dispatched_eligible}")
     if not eligible_vehicles:
         raise HTTPException(status_code=503, detail="No available or reroutable vehicles to assign")
 
