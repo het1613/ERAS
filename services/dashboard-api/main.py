@@ -649,6 +649,18 @@ async def admin_reset():
     except Exception as e:
         logger.warning(f"Failed to reset geospatial-dispatch: {e}")
 
+    # Restart the vehicle simulator container to clear its in-memory state
+    sim_container = os.getenv("VEHICLE_SIMULATOR_CONTAINER", "eras-vehicle-simulator")
+    try:
+        async with httpx.AsyncClient(transport=httpx.AsyncHTTPTransport(uds="/var/run/docker.sock")) as docker:
+            resp = await docker.post(f"http://localhost/containers/{sim_container}/restart", timeout=30.0)
+            if resp.status_code in (204, 304):
+                logger.info(f"Restarted vehicle simulator container '{sim_container}'")
+            else:
+                logger.warning(f"Vehicle simulator restart returned {resp.status_code}: {resp.text}")
+    except Exception as e:
+        logger.warning(f"Failed to restart vehicle simulator container: {e}")
+
     await manager.broadcast({"type": "system_reset", "data": {}})
     logger.info("Admin reset complete")
     return {"status": "reset_complete"}
@@ -926,6 +938,7 @@ def process_vehicle_location_message(message_value: dict):
             message_value['timestamp'] = datetime.fromisoformat(message_value['timestamp'])
 
         location = VehicleLocation(**message_value)
+
         if status_from_sim:
             vehicle_statuses[location.vehicle_id] = status_from_sim
         status = vehicle_statuses.get(location.vehicle_id, "available")
@@ -952,13 +965,17 @@ def process_vehicle_dispatch_message(message_value: dict):
         route_raw = message_value.get("route", [])
         route = [{"lat": point[0], "lng": point[1]} for point in route_raw]
 
-        if vehicle_id:
-            vehicle_statuses[vehicle_id] = "dispatched"
-
         if vehicle_id and incident_id:
             conn = get_connection()
             try:
                 with conn.cursor() as cur:
+                    cur.execute("SELECT status FROM incidents WHERE id=%s", (incident_id,))
+                    row = cur.fetchone()
+                    if not row:
+                        logger.debug(f"Ignoring dispatch for deleted incident {incident_id}")
+                        return
+                    if vehicle_id:
+                        vehicle_statuses[vehicle_id] = "dispatched"
                     cur.execute(
                         "UPDATE dispatches SET status='completed', completed_at=CURRENT_TIMESTAMP "
                         "WHERE vehicle_id=%s AND status='active'", (vehicle_id,))
@@ -966,14 +983,23 @@ def process_vehicle_dispatch_message(message_value: dict):
                         cur.execute(
                             "INSERT INTO dispatches (incident_id, vehicle_id, route, status) VALUES (%s,%s,%s,'active')",
                             (incident_id, vehicle_id, json.dumps(route)))
-                    cur.execute("SELECT status FROM incidents WHERE id=%s", (incident_id,))
-                    row = cur.fetchone()
                     if row:
                         old_status = row[0]
+                        # Detect reroute reassignment: incident was dispatched but getting a different vehicle
+                        cur.execute("SELECT assigned_vehicle_id FROM incidents WHERE id=%s", (incident_id,))
+                        avrow = cur.fetchone()
+                        old_assigned_vehicle = avrow[0] if avrow else None
+                        is_reassignment = (old_status == "dispatched" and old_assigned_vehicle
+                                           and old_assigned_vehicle != vehicle_id)
                         cur.execute(
                             "UPDATE incidents SET status='dispatched', assigned_vehicle_id=%s, updated_at=CURRENT_TIMESTAMP WHERE id=%s",
                             (vehicle_id, incident_id))
-                        _log_incident_event(conn, incident_id, "status_change", old_status, "dispatched", vehicle_id)
+                        if is_reassignment:
+                            _log_incident_event(conn, incident_id, "reroute_reassigned", old_status, "dispatched", vehicle_id,
+                                                metadata={"old_vehicle_id": old_assigned_vehicle})
+                            logger.info(f"Reroute reassignment: incident {incident_id} reassigned from {old_assigned_vehicle} to {vehicle_id}")
+                        else:
+                            _log_incident_event(conn, incident_id, "status_change", old_status, "dispatched", vehicle_id)
                 conn.commit()
 
                 with conn.cursor() as cur:
@@ -1007,9 +1033,6 @@ def process_vehicle_arrival_message(message_value: dict):
         if not incident_id:
             return
 
-        if vehicle_id:
-            vehicle_statuses[vehicle_id] = "on_scene"
-
         conn = get_connection()
         try:
             with conn.cursor() as cur:
@@ -1017,6 +1040,8 @@ def process_vehicle_arrival_message(message_value: dict):
                 row = cur.fetchone()
                 if not row:
                     return
+                if vehicle_id:
+                    vehicle_statuses[vehicle_id] = "on_scene"
                 old_status = row[0]
                 cur.execute("UPDATE incidents SET status='on_scene', updated_at=CURRENT_TIMESTAMP WHERE id=%s",
                             (incident_id,))
@@ -1048,9 +1073,6 @@ def process_vehicle_transporting_message(message_value: dict):
         if not incident_id:
             return
 
-        if vehicle_id:
-            vehicle_statuses[vehicle_id] = "transporting"
-
         route = [{"lat": point[0], "lng": point[1]} for point in route_raw]
 
         conn = get_connection()
@@ -1060,6 +1082,8 @@ def process_vehicle_transporting_message(message_value: dict):
                 row = cur.fetchone()
                 if not row:
                     return
+                if vehicle_id:
+                    vehicle_statuses[vehicle_id] = "transporting"
                 old_status = row[0]
                 cur.execute("UPDATE incidents SET status='transporting', updated_at=CURRENT_TIMESTAMP WHERE id=%s",
                             (incident_id,))
@@ -1114,9 +1138,6 @@ def process_vehicle_at_hospital_message(message_value: dict):
         if not incident_id:
             return
 
-        if vehicle_id:
-            vehicle_statuses[vehicle_id] = "at_hospital"
-
         conn = get_connection()
         try:
             with conn.cursor() as cur:
@@ -1124,6 +1145,8 @@ def process_vehicle_at_hospital_message(message_value: dict):
                 row = cur.fetchone()
                 if not row:
                     return
+                if vehicle_id:
+                    vehicle_statuses[vehicle_id] = "at_hospital"
                 old_status = row[0]
                 cur.execute("UPDATE incidents SET status='at_hospital', updated_at=CURRENT_TIMESTAMP WHERE id=%s",
                             (incident_id,))
@@ -1153,9 +1176,6 @@ def process_vehicle_resolved_message(message_value: dict):
         if not incident_id:
             return
 
-        if vehicle_id:
-            vehicle_statuses[vehicle_id] = "returning"
-
         conn = get_connection()
         try:
             with conn.cursor() as cur:
@@ -1163,6 +1183,8 @@ def process_vehicle_resolved_message(message_value: dict):
                 row = cur.fetchone()
                 if not row:
                     return
+                if vehicle_id:
+                    vehicle_statuses[vehicle_id] = "returning"
                 old_status = row[0]
                 cur.execute("UPDATE incidents SET status='resolved', updated_at=CURRENT_TIMESTAMP WHERE id=%s",
                             (incident_id,))

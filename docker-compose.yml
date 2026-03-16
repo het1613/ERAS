@@ -153,6 +153,9 @@ services:
       KAFKA_CONSUMER_GROUP_ID: dashboard-api-service
       GEOSPATIAL_DISPATCH_URL: http://geospatial-dispatch:8002
       DATABASE_URL: postgresql://${POSTGRES_USER:-eras_user}:${POSTGRES_PASSWORD:-eras_pass}@postgres:5432/${POSTGRES_DB:-eras_db}
+      VEHICLE_SIMULATOR_CONTAINER: eras-vehicle-simulator
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
     depends_on:
       kafka:
         condition: service_healthy

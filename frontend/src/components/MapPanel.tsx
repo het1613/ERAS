@@ -296,7 +296,26 @@ export default function MapPanel({
 						</div>
 					</OverlayView>
 				))}
-				{/* Dispatch Suggestion Popup — positioned above or below ambulance to avoid blocking route */}
+				{/* Reassignment route preview (dashed blue) for reroute suggestions */}
+				{dispatchSuggestion?.isReroute && dispatchSuggestion.reassignment?.routePreview &&
+					dispatchSuggestion.reassignment.routePreview.length > 0 && (
+					<Polyline
+						key="reassign-preview-route"
+						path={dispatchSuggestion.reassignment.routePreview}
+						options={{
+							strokeColor: "#2563EB",
+							strokeOpacity: 0,
+							strokeWeight: 4,
+							icons: [{
+								icon: { path: "M 0,-1 0,1", strokeOpacity: 1, scale: 3 },
+								offset: "0",
+								repeat: "14px",
+							}],
+						}}
+					/>
+				)}
+
+			{/* Dispatch Suggestion Popup — positioned above or below ambulance to avoid blocking route */}
 				{dispatchSuggestion && dispatchSuggestion.incident && (() => {
 					const suggestedUnit = units.find(
 						(u) => u.id.toLowerCase().replace(/\s+/g, "-") === dispatchSuggestion.vehicleId,
@@ -306,6 +325,7 @@ export default function MapPanel({
 					const inc = dispatchSuggestion.incident;
 					const priorityColor = RAW_PRIORITY_COLORS[inc.priority as CasePriority] ?? "#888";
 					const vehicleLabel = formatVehicleLabel(dispatchSuggestion.vehicleId);
+					const isReroute = dispatchSuggestion.isReroute;
 
 					// If incident is above (north of) the ambulance, show popup below; otherwise above
 					const incidentAbove = Number(inc.lat) > pos.lat;
@@ -329,6 +349,7 @@ export default function MapPanel({
 									minWidth: "280px",
 									width: "max-content",
 									position: "relative",
+									borderTop: isReroute ? "3px solid #d97706" : undefined,
 								}}>
 									<button
 										onClick={onCloseSuggestion}
@@ -349,7 +370,9 @@ export default function MapPanel({
 										×
 									</button>
 									<div className="map-iw">
-										<div className="map-iw-label">Dispatch Suggestion</div>
+										<div className="map-iw-label" style={isReroute ? { color: "#d97706" } : undefined}>
+											{isReroute ? "Reroute Suggestion" : "Dispatch Suggestion"}
+										</div>
 										<div className="map-iw-vehicle">{vehicleLabel}</div>
 										<div className="map-iw-incident">
 											<span className="map-iw-dot" style={{ backgroundColor: priorityColor }} />
@@ -367,8 +390,41 @@ export default function MapPanel({
 												ETA: {Math.ceil(dispatchSuggestion.durationSeconds / 60)} min
 											</div>
 										)}
+										{/* Reroute info: show preempted case and reassignment */}
+										{isReroute && dispatchSuggestion.preemptedIncident && (
+											<div style={{
+												marginTop: 8,
+												padding: "8px",
+												background: "#fffbeb",
+												borderRadius: "6px",
+												border: "1px solid #fde68a",
+												fontSize: "12px",
+											}}>
+												<div style={{ fontWeight: 600, color: "#92400e", marginBottom: 4 }}>
+													Currently assigned to:
+												</div>
+												<div style={{ display: "flex", alignItems: "center", gap: 4 }}>
+													<span style={{
+														width: 8, height: 8, borderRadius: "50%", display: "inline-block",
+														backgroundColor: RAW_PRIORITY_COLORS[dispatchSuggestion.preemptedIncident.priority as CasePriority] ?? "#888",
+													}} />
+													<span>{dispatchSuggestion.preemptedIncident.type}</span>
+													<span style={{ color: "#666" }}>at {dispatchSuggestion.preemptedIncident.location}</span>
+												</div>
+												{dispatchSuggestion.reassignment && (
+													<div style={{ marginTop: 4, color: "#166534" }}>
+														{formatVehicleLabel(dispatchSuggestion.reassignment.vehicleId)} will take over
+														{dispatchSuggestion.reassignment.durationSeconds != null && (
+															<span> (ETA: {Math.ceil(dispatchSuggestion.reassignment.durationSeconds / 60)} min)</span>
+														)}
+													</div>
+												)}
+											</div>
+										)}
 										<div className="map-iw-actions">
-											<button className="map-iw-btn map-iw-btn-accept" onClick={onAcceptSuggestion}>Accept</button>
+											<button className="map-iw-btn map-iw-btn-accept" onClick={onAcceptSuggestion}>
+												{isReroute ? "Accept Reroute" : "Accept"}
+											</button>
 											<button className="map-iw-btn map-iw-btn-another" onClick={onDeclineSuggestion}>Suggest Another</button>
 										</div>
 									</div>
