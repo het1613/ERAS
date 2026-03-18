@@ -554,6 +554,26 @@ async def proxy_decline(suggestion_id: str):
         raise HTTPException(status_code=503, detail="Geospatial service unavailable")
 
 
+@app.post("/incidents/{incident_id}/clear-declined")
+async def clear_declined_vehicles(incident_id: str):
+    """Clear the declined_vehicles list from an incident's dispatch_metadata."""
+    conn = get_connection()
+    try:
+        with conn.cursor() as cur:
+            cur.execute("SELECT dispatch_metadata FROM incidents WHERE id = %s", (incident_id,))
+            row = cur.fetchone()
+            if not row:
+                raise HTTPException(status_code=404, detail="Incident not found")
+            metadata = row[0] if row[0] else {}
+            metadata.pop("declined_vehicles", None)
+            cur.execute("UPDATE incidents SET dispatch_metadata = %s WHERE id = %s",
+                        (json.dumps(metadata), incident_id))
+        conn.commit()
+    finally:
+        conn.close()
+    return {"status": "ok"}
+
+
 @app.post("/assignments/{suggestion_id}/decline-and-reassign")
 async def decline_and_reassign(suggestion_id: str, req: DeclineAndReassignRequest):
     try:

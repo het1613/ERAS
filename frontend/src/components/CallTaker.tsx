@@ -133,8 +133,8 @@ const CallTaker: React.FC = () => {
     isApartment: false,
     apartmentNumber: '',
     doorPin: '',
-    conscious: false,
-    breathing: false,
+    conscious: 'Unknown' as 'Yes' | 'No' | 'Unknown',
+    breathing: 'Unknown' as 'Yes' | 'No' | 'Unknown',
     phoneNumber: '',
     cautionNotes: '',
   });
@@ -490,7 +490,7 @@ const CallTaker: React.FC = () => {
         const err = await res.json().catch(() => ({}));
         throw new Error(err.detail || `HTTP ${res.status}`);
       }
-      setManualForm({ location: '', lat: '43.4643', lon: '-80.5205', incident_code: '', priority: 'Yellow', age: '', sex: '', isApartment: false, apartmentNumber: '', doorPin: '', conscious: false, breathing: false, phoneNumber: '', cautionNotes: '' });
+      setManualForm({ location: '', lat: '43.4643', lon: '-80.5205', incident_code: '', priority: 'Yellow', age: '', sex: '', isApartment: false, apartmentNumber: '', doorPin: '', conscious: 'Unknown', breathing: 'Unknown', phoneNumber: '', cautionNotes: '' });
       setManualOpen(false);
       setManualShowCoords(false);
     } catch (error) {
@@ -981,24 +981,35 @@ const CallTaker: React.FC = () => {
 
                   {/* Consciousness & Breathing */}
                   <div className="ct-field">
-                    <div className="ct-field-label"><span>Patient Status</span></div>
-                    <div className="ct-checkbox-group">
-                      <label className="ct-checkbox-label">
-                        <input
-                          type="checkbox"
-                          checked={manualForm.conscious}
-                          onChange={e => setManualForm(prev => ({ ...prev, conscious: e.target.checked }))}
-                        />
-                        <span>Conscious</span>
-                      </label>
-                      <label className="ct-checkbox-label">
-                        <input
-                          type="checkbox"
-                          checked={manualForm.breathing}
-                          onChange={e => setManualForm(prev => ({ ...prev, breathing: e.target.checked }))}
-                        />
-                        <span>Breathing</span>
-                      </label>
+                    <div className="ct-field-label"><span>Consciousness</span></div>
+                    <div className="ct-radio-group">
+                      {(['Yes', 'No', 'Unknown'] as const).map(val => (
+                        <label key={val} className="ct-radio-label">
+                          <input
+                            type="radio"
+                            name="conscious"
+                            checked={manualForm.conscious === val}
+                            onChange={() => setManualForm(prev => ({ ...prev, conscious: val }))}
+                          />
+                          <span>{val}</span>
+                        </label>
+                      ))}
+                    </div>
+                  </div>
+                  <div className="ct-field">
+                    <div className="ct-field-label"><span>Breathing</span></div>
+                    <div className="ct-radio-group">
+                      {(['Yes', 'No', 'Unknown'] as const).map(val => (
+                        <label key={val} className="ct-radio-label">
+                          <input
+                            type="radio"
+                            name="breathing"
+                            checked={manualForm.breathing === val}
+                            onChange={() => setManualForm(prev => ({ ...prev, breathing: val }))}
+                          />
+                          <span>{val}</span>
+                        </label>
+                      ))}
                     </div>
                   </div>
 
