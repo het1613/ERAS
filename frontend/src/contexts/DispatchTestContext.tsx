@@ -54,6 +54,7 @@ interface DispatchTestContextValue {
 	roundOrder: RoundMode[];
 	testLocked: boolean;
 	submitTlx: (scores: TlxScores) => void;
+	submitFeedback: (feedback: string) => void;
 	round1Incidents: TestIncident[];
 	round2Incidents: TestIncident[];
 	round1TlxScores: TlxScores | null;
@@ -428,25 +429,31 @@ export function DispatchTestProvider({ children }: { children: ReactNode }) {
 				setCurrentRound(2);
 				startRound(2, roundOrder);
 			} else {
-				// Round 2 complete — finish study
+				// Round 2 complete — show results (study completed on feedback submit)
 				setRound2Incidents([...incidents]);
 				setRound2TlxScores(scores);
 				setTestLocked(false);
-
-				if (studyId) {
-					try {
-						await fetch(`${apiUrl}/user-studies/${studyId}/complete`, {
-							method: "POST",
-						});
-					} catch (err) {
-						console.error("Failed to complete study:", err);
-					}
-				}
-
 				setPhase("complete");
 			}
 		},
 		[incidents, currentRound, roundOrder, studyId, apiUrl, startRound]
+	);
+
+	const submitFeedback = useCallback(
+		async (feedback: string) => {
+			if (studyId) {
+				try {
+					await fetch(`${apiUrl}/user-studies/${studyId}/complete`, {
+						method: "POST",
+						headers: { "Content-Type": "application/json" },
+						body: JSON.stringify({ feedback: feedback || null }),
+					});
+				} catch (err) {
+					console.error("Failed to complete study:", err);
+				}
+			}
+		},
+		[studyId, apiUrl]
 	);
 
 	const dismissResults = useCallback(() => {
@@ -488,6 +495,7 @@ export function DispatchTestProvider({ children }: { children: ReactNode }) {
 				roundOrder,
 				testLocked,
 				submitTlx,
+				submitFeedback,
 				round1Incidents,
 				round2Incidents,
 				round1TlxScores,

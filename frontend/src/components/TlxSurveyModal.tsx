@@ -60,12 +60,12 @@ const TLX_DIMENSIONS = [
 ];
 
 const DEFAULT_SCORES: TlxScores = {
-	mentalDemand: 50,
-	physicalDemand: 50,
-	temporalDemand: 50,
-	effort: 50,
-	performance: 50,
-	frustration: 50,
+	mentalDemand: 10,
+	physicalDemand: 10,
+	temporalDemand: 10,
+	effort: 10,
+	performance: 10,
+	frustration: 10,
 };
 
 export default function TlxSurveyModal() {
@@ -157,8 +157,8 @@ export default function TlxSurveyModal() {
 									<input
 										type="range"
 										min={0}
-										max={100}
-										step={5}
+										max={20}
+										step={1}
 										value={scores[dim.key]}
 										onChange={(e) =>
 											handleChange(dim.key, Number(e.target.value))

@@ -7,6 +7,7 @@ import NavBar from "./components/NavBar";
 import TestResultsModal from "./components/TestResultsModal";
 import TestConsentModal from "./components/TestConsentModal";
 import TlxSurveyModal from "./components/TlxSurveyModal";
+import ResetModal from "./components/ResetModal";
 import { WebSocketProvider } from "./contexts/WebSocketContext";
 import { DispatchTestProvider } from "./contexts/DispatchTestContext";
 import "./App.css";
@@ -28,6 +29,7 @@ function App() {
 						</main>
 					</div>
 					<TestConsentModal />
+					<ResetModal />
 					<TlxSurveyModal />
 					<TestResultsModal />
 				</DispatchTestProvider>

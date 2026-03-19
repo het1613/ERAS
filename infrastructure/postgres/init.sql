@@ -153,6 +153,7 @@ INSERT INTO vehicles (id, lat, lon, status, vehicle_type) VALUES
 CREATE TABLE IF NOT EXISTS user_studies (
     id VARCHAR(36) PRIMARY KEY,
     round_order VARCHAR(20) NOT NULL,
+    feedback TEXT,
     started_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     completed_at TIMESTAMP
 );

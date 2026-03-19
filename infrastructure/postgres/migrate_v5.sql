@@ -3,6 +3,7 @@
 CREATE TABLE IF NOT EXISTS user_studies (
     id VARCHAR(36) PRIMARY KEY,
     round_order VARCHAR(20) NOT NULL,  -- "manual_first" or "optimizer_first"
+    feedback TEXT,
     started_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     completed_at TIMESTAMP
 );

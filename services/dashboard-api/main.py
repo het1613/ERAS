@@ -810,14 +810,18 @@ async def save_study_round(req: SaveStudyRoundRequest):
         conn.close()
 
 
+class CompleteUserStudyRequest(BaseModel):
+    feedback: Optional[str] = None
+
+
 @app.post("/user-studies/{study_id}/complete")
-async def complete_user_study(study_id: str):
+async def complete_user_study(study_id: str, req: CompleteUserStudyRequest = CompleteUserStudyRequest()):
     conn = get_connection()
     try:
         with conn.cursor() as cur:
             cur.execute(
-                "UPDATE user_studies SET completed_at = NOW() WHERE id = %s",
-                (study_id,),
+                "UPDATE user_studies SET completed_at = NOW(), feedback = %s WHERE id = %s",
+                (req.feedback, study_id),
             )
         conn.commit()
         return {"status": "completed"}
