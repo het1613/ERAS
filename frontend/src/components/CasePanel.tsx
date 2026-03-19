@@ -37,17 +37,8 @@ export default function CasesPanel({
 			}
 		}
 
-		active.sort((a, b) => {
-			if (focusedIncidentId) {
-				if (a.id === focusedIncidentId) return -1;
-				if (b.id === focusedIncidentId) return 1;
-			}
-			if (b.weight !== a.weight) return b.weight - a.weight;
-			return new Date(a.reported_at).getTime() - new Date(b.reported_at).getTime();
-		});
-
 		return { active, priorityCounts: counts };
-	}, [incidents, focusedIncidentId]);
+	}, [incidents]);
 
 	useEffect(() => {
 		if (focusedIncidentId && caseListRef.current) {

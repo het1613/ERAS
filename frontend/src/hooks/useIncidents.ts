@@ -12,10 +12,18 @@ interface UseIncidentsResult {
 	loading: boolean;
 }
 
+/** CaseInfo + a monotonic client-side counter so we can sort newest-first reliably. */
+interface TrackedIncident {
+	incident: CaseInfo;
+	seq: number;
+}
+
+let nextSeq = 0;
+
 export function useIncidents(options?: UseIncidentsOptions): UseIncidentsResult {
 	const onNewIncidentRef = useRef(options?.onNewIncident);
 	onNewIncidentRef.current = options?.onNewIncident;
-	const [incidentMap, setIncidentMap] = useState<Map<string, CaseInfo>>(
+	const [incidentMap, setIncidentMap] = useState<Map<string, TrackedIncident>>(
 		new Map()
 	);
 	const [loading, setLoading] = useState(true);
@@ -30,9 +38,9 @@ export function useIncidents(options?: UseIncidentsOptions): UseIncidentsResult 
 				if (!res.ok) throw new Error(`HTTP ${res.status}`);
 				const data = await res.json();
 				const fetched: CaseInfo[] = data.incidents ?? data;
-				const map = new Map<string, CaseInfo>();
+				const map = new Map<string, TrackedIncident>();
 				for (const inc of fetched) {
-					map.set(inc.id, inc);
+					map.set(inc.id, { incident: inc, seq: nextSeq++ });
 				}
 				setIncidentMap(map);
 			} catch (err) {
@@ -53,7 +61,11 @@ export function useIncidents(options?: UseIncidentsOptions): UseIncidentsResult 
 			const incident: CaseInfo = msg.data;
 			setIncidentMap((prev) => {
 				const next = new Map(prev);
-				next.set(incident.id, incident);
+				const existing = prev.get(incident.id);
+				next.set(incident.id, {
+					incident,
+					seq: existing ? existing.seq : nextSeq++,
+				});
 				return next;
 			});
 			if (msg.type === "incident_created" && onNewIncidentRef.current) {
@@ -66,8 +78,12 @@ export function useIncidents(options?: UseIncidentsOptions): UseIncidentsResult 
 		return subscribe(handleMessage);
 	}, [subscribe, handleMessage]);
 
+	const incidents = Array.from(incidentMap.values())
+		.sort((a, b) => b.seq - a.seq)
+		.map((t) => t.incident);
+
 	return {
-		incidents: Array.from(incidentMap.values()),
+		incidents,
 		connected,
 		loading,
 	};
