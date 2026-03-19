@@ -1142,30 +1142,18 @@ const CallTaker: React.FC = () => {
                           <Badge variant="warning" size="sm">Unverified</Badge>
                         )}
                       </div>
-                      {editingLocationId === s.id ? (
-                        <div className="ct-field-edit-row">
-                          <input
-                            type="text"
-                            className="ct-input"
-                            value={override.location}
-                            onChange={e => updateOverride(s.id, 'location', e.target.value)}
-                            onBlur={e => geocodeLocation(s.id, e.target.value)}
-                            autoFocus
-                            placeholder="e.g. 234 Columbia St"
-                          />
-                          <button className="ct-icon-btn" onClick={() => setEditingLocationId(null)}><Check size={13} /></button>
-                        </div>
-                      ) : (
-                        <div className="ct-location-display">
-                          <span className="ct-location-address">
-                            {override.location || <span className="ct-placeholder">No location set</span>}
-                          </span>
-                          <button className="ct-icon-btn" onClick={() => setEditingLocationId(s.id)}>
-                            <Pencil size={12} />
-                          </button>
-                          {geocodingId === s.id && <span className="ct-spinner" />}
-                        </div>
-                      )}
+                      <div className="ct-field-edit-row">
+                        <input
+                          type="text"
+                          className="ct-input"
+                          value={override.location}
+                          onChange={e => updateOverride(s.id, 'location', e.target.value)}
+                          onBlur={e => geocodeLocation(s.id, e.target.value)}
+                          onKeyDown={e => { if (e.key === 'Enter') (e.target as HTMLInputElement).blur(); }}
+                          placeholder="e.g. 234 Columbia St"
+                        />
+                        {geocodingId === s.id && <span className="ct-spinner" />}
+                      </div>
                       {/* Collapsible coords */}
                       <button className="ct-coords-toggle" onClick={() => setShowCoordsId(showCoordsId === s.id ? null : s.id)}>
                         {showCoordsId === s.id ? <ChevronDown size={11} /> : <ChevronRight size={11} />}

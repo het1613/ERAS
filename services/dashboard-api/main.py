@@ -1204,7 +1204,7 @@ def process_vehicle_resolved_message(message_value: dict):
                 if not row:
                     return
                 if vehicle_id:
-                    vehicle_statuses[vehicle_id] = "returning"
+                    vehicle_statuses[vehicle_id] = "available"
                 old_status = row[0]
                 cur.execute("UPDATE incidents SET status='resolved', updated_at=CURRENT_TIMESTAMP WHERE id=%s",
                             (incident_id,))
