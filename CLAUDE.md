@@ -72,16 +72,17 @@ Priority-to-weight mapping (auto-set when weight omitted): Purple=16, Red=8, Ora
 
 ## Incidents Flow
 
-1. **Create (call taker via AI):** `POST /suggestions/{id}/accept` on dashboard-api creates incident with `source='call_taker'`, writes to DB, broadcasts `incident_created` over WebSocket, auto-triggers dispatch optimization.
-2. **Create (call taker manual):** `POST /incidents` with `source='call_taker'` creates incident, broadcasts, and auto-triggers dispatch (same as AI-accepted). Used by the Manual Incident Entry form in the call-taker UI.
+1. **Create (call taker via AI):** `POST /suggestions/{id}/accept` on dashboard-api creates incident with `source='call_taker'`, writes to DB, broadcasts `incident_created` over WebSocket.
+2. **Create (call taker manual):** `POST /incidents` with `source='call_taker'` creates incident and broadcasts. Used by the Manual Incident Entry form in the call-taker UI.
 3. **Create (testing):** `POST /incidents` without `source` (defaults to `'manual'`). These do NOT appear in dispatcher Cases tab.
 4. **List/Get:** `GET /incidents[?status=open&source=call_taker]`, `GET /incidents/{id}` on dashboard-api reads from DB.
 5. **Update:** `PATCH /incidents/{id}` on dashboard-api updates DB, logs to `incident_events`, broadcasts `incident_updated` over WebSocket.
-6. **Auto-Dispatch (server-side):** When call-taker accepts a suggestion or creates a manual call-taker incident, dashboard-api creates the incident AND immediately calls geospatial-dispatch `find-best`. The result is broadcast via a `dispatch_suggestion` WebSocket message.
+6. **Dispatch is dispatcher-initiated (no auto-dispatch).** Incident creation does NOT trigger `find-best`. The dispatcher must click the "Dispatch" button on a case card, which triggers the frontend to call `find-best` (default mode) or enter manual ambulance selection mode.
 7. **Find-Best:** `POST /assignments/find-best` runs ILP optimizer (loads hospitals from DB via `get_hospitals_from_db()`), fetches OSRM route preview, returns suggestion including `hospital` object (id, name, lat, lon, address). Accepts optional `exclude_vehicles` list. Does NOT change incident status. Stores route + hospital in `vehicle_assignments` for reuse on accept.
-8. **Accept:** `POST /assignments/{suggestion_id}/accept` marks vehicle as dispatched, publishes `vehicle-dispatches` Kafka event (includes `hospital_lat/lon/name`). Dashboard-api consumes the dispatch event and transitions incident to `dispatched`, sets `assigned_vehicle_id`, persists route in `dispatches` table.
-9. **Decline:** `POST /assignments/{suggestion_id}/decline` removes suggestion from memory. No status changes.
-10. **Decline-and-Reassign:** `POST /assignments/{suggestion_id}/decline-and-reassign` declines the current suggestion, persists declined vehicle in `dispatch_metadata` JSONB, re-runs find-best with excluded vehicles.
+8. **Preview:** `POST /assignments/preview` takes `{incident_id, vehicle_id}`, fetches OSRM route for a specific vehicle-incident pair, finds nearest hospital. Returns same format as find-best without running the ILP optimizer. Used for manual ambulance selection.
+9. **Accept:** `POST /assignments/{suggestion_id}/accept` marks vehicle as dispatched, publishes `vehicle-dispatches` Kafka event (includes `hospital_lat/lon/name`). Dashboard-api consumes the dispatch event and transitions incident to `dispatched`, sets `assigned_vehicle_id`, persists route in `dispatches` table.
+10. **Decline:** `POST /assignments/{suggestion_id}/decline` removes suggestion from memory. No status changes.
+11. **Decline-and-Reassign:** `POST /assignments/{suggestion_id}/decline-and-reassign` declines the current suggestion, persists declined vehicle in `dispatch_metadata` JSONB, re-runs find-best with excluded vehicles.
 
 ### Full Case Lifecycle (via Kafka events from simulator):
 1. **dispatched** → Vehicle dispatched to scene (from `vehicle-dispatches` Kafka topic)
@@ -122,12 +123,16 @@ When an assignment is accepted, geospatial-dispatch fetches a driving route from
 
 **Frontend call-taker & dispatch UI** (`frontend/src/`):
 - `components/CallTaker.tsx` — Call-taker screen. Shows live transcript, AI suggestions with editable fields, and a **Manual Incident Entry** card always at the top of AI Suggestions (creates incidents with `source='call_taker'` via `POST /incidents`).
-- `hooks/useDispatchSuggestion.ts` — manages active dispatch suggestion state. Parses `hospital` from suggestion data.
+- `hooks/useDispatchSuggestion.ts` — Queue-based dispatch suggestion management (FIFO queue, not single suggestion). Exposes `findBest` (clears queue, calls optimizer), `preview` (replaces front of queue for specific vehicle), `accept`/`decline`/`declineAndReassign` (pop front). Also exposes `queueLength`. WS `dispatch_suggestion` messages append to queue.
+- `hooks/useIncidents.ts` — REST + WebSocket incident sync. Uses client-side monotonic counter (`seq`) for ordering so newest incidents always sort first regardless of server timestamps.
+- `contexts/DispatchTestContext.tsx` — Dispatch test orchestration (6 timed incidents) and `manualMode` toggle. Shared between NavBar and Dashboard.
 - `components/types.ts` — `CaseStatus` type includes all lifecycle statuses. `CaseInfo` includes `source` and `assigned_vehicle_id`. `Hospital` interface. `DispatchSuggestion` includes optional `hospital`.
-- `components/CaseCard.tsx` — Shows full lifecycle progress bar: Open → Dispatched → En Route → On Scene → Transporting → At Hospital → Resolved. Shows assigned vehicle name.
-- `components/CasePanel.tsx` — "Active Cases" (non-resolved) and "Past Cases" (resolved, collapsible) sections.
-- `components/Dashboard.tsx` — Filters incidents to `source=call_taker` for the Cases tab. Builds `dispatchInfoMap` directly from incident status. Fetches `GET /hospitals` on mount and passes to `MapPanel`.
-- `components/MapPanel.tsx` — Renders dispatch suggestions (with hospital name), routes, ambulance markers, and dynamic hospital markers (from `hospitals` prop, no longer hardcoded).
+- `components/CaseCard.tsx` — Shows full lifecycle progress bar: Open → Dispatched → En Route → On Scene → Transporting → At Hospital → Resolved. Shows assigned vehicle name. "Dispatch" button shown for open cases without active dispatch.
+- `components/CasePanel.tsx` — "Active Cases" (non-resolved) section. Sorted by arrival order (newest first from `useIncidents`).
+- `components/Dashboard.tsx` — Filters incidents to `source=call_taker` for the Cases tab. `handleDispatch` respects `manualMode`: default calls `findBest`, manual enters ambulance selection. `handleAmbulanceClick` calls `preview` when `dispatchingIncidentId` is set. Uses `focusedIncidentSeq` counter to ensure map always re-pans.
+- `components/MapPanel.tsx` — Renders dispatch suggestions (with hospital name), routes, ambulance markers, and dynamic hospital markers. Shows "Select an ambulance to dispatch" banner when in manual selection mode (`dispatchingIncidentId` set, no suggestion yet).
+- `components/NavBar.tsx` — "Manual" toggle button (switches dispatch mode), "Start Test" button, test progress badge, "Reset" button.
+- `components/TestResultsModal.tsx` — Results table after dispatch test completes, showing per-incident time-to-dispatch and average.
 
 **Key types** in `shared/types.py`: `VehicleDispatchEvent` (includes optional `hospital_lat/lon/name`), `VehicleArrivalEvent`, `VehicleTransportingEvent` (includes optional `hospital_lat/lon/name`), `VehicleAtHospitalEvent`, `AssignmentSuggestion` (includes optional `hospital_id/name/lat/lon/address`), `GRAND_RIVER_HOSPITAL`, `INCIDENT_STATUSES`.
 
@@ -218,7 +223,7 @@ Toggled via `STT_PROVIDER` env var in `.env` (loaded automatically by Docker Com
 curl -X POST http://localhost:8000/incidents -H "Content-Type: application/json" \
   -d '{"lat":43.47,"lon":-80.54,"location":"234 Columbia St","type":"Cardiac Arrest","priority":"Purple"}'
 
-# Create incident as call_taker (shows in Cases tab, auto-dispatches)
+# Create incident as call_taker (shows in Cases tab, dispatcher must manually dispatch)
 curl -X POST http://localhost:8000/incidents -H "Content-Type: application/json" \
   -d '{"lat":43.47,"lon":-80.54,"location":"234 Columbia St","type":"Cardiac Arrest","priority":"Purple","source":"call_taker"}'
 
@@ -232,9 +237,13 @@ curl "http://localhost:8000/incidents?source=call_taker"
 curl -X PATCH http://localhost:8000/incidents/{id} -H "Content-Type: application/json" \
   -d '{"status":"resolved"}'
 
-# Find best vehicle assignment (via dashboard-api proxy)
+# Find best vehicle assignment via optimizer (via dashboard-api proxy)
 curl -X POST http://localhost:8000/assignments/find-best -H "Content-Type: application/json" \
   -d '{"incident_id":"<uuid>"}'
+
+# Preview assignment for a specific vehicle (no optimizer, just OSRM route + nearest hospital)
+curl -X POST http://localhost:8000/assignments/preview -H "Content-Type: application/json" \
+  -d '{"incident_id":"<uuid>","vehicle_id":"ambulance-1"}'
 
 # Accept assignment (triggers OSRM route + Kafka dispatch event)
 curl -X POST http://localhost:8000/assignments/{suggestion_id}/accept
@@ -264,4 +273,16 @@ curl http://localhost:8000/hospitals
 - ILP optimizer still uses Euclidean distance for assignment scoring; only post-accept routing uses OSRM
 - OSRM uses public demo server (`router.project-osrm.org`) — should self-host for production
 - Full lifecycle depends on simulator running; without it, incidents must be manually resolved via `PATCH /incidents/{id}`
-- Only one dispatch suggestion can be active at a time in the frontend (`useDispatchSuggestion` stores a single suggestion). Queuing/multi-incident dispatch is not yet supported.
+- `useDispatchSuggestion` uses a FIFO queue but only the front suggestion is shown at a time. Multi-incident simultaneous dispatch is not yet supported.
+
+## Dispatch Test & Manual Mode
+
+**Dispatch Test** (`contexts/DispatchTestContext.tsx`): Creates 6 hardcoded incidents at 10s intervals, tracks time from creation to `dispatched` status via WebSocket, shows results modal with per-incident timing. Triggered via "Start Test" button in NavBar. Resets system first, then creates incidents. 2-minute timeout fallback.
+
+**Manual Mode** (toggled via "Manual" button in NavBar): Two dispatch modes shared via `DispatchTestContext`:
+- **Default (optimizer):** Clicking "Dispatch" on a case calls `POST /assignments/find-best` → optimizer suggestion shown immediately on map. Clicking a different ambulance calls `POST /assignments/preview` to replace the suggestion with that vehicle's route.
+- **Manual mode:** Clicking "Dispatch" enters ambulance selection mode (map pans to incident, banner shown). User must click an ambulance marker to get a route preview via `POST /assignments/preview`.
+
+In both modes, the dispatcher accepts/declines the suggestion via the map tooltip. Accepting dispatches the vehicle; declining clears the suggestion.
+
+**Incident inflow simulator** (`scripts/simulate_incident_inflow.py`): Creates batches of incidents for user testing. Calls `find-best` explicitly after each incident creation (no auto-dispatch). Supports `--count 10|20|40|80` with configurable delay. SCENARIO_10 includes 4 auto-accepted low-priority incidents (for reroute testing) and 6 user-handled incidents.

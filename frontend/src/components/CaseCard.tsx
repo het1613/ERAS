@@ -1,4 +1,4 @@
-import { useState, useEffect } from "react";
+import { useState, useEffect, useRef } from "react";
 import { MapPin, Clock, Truck } from "lucide-react";
 import { CaseInfo, CaseStatus, PRIORITY_COLORS, PRIORITY_BGS, CasePriority } from "./types";
 import Badge from "./ui/Badge";
@@ -96,14 +96,22 @@ interface CaseCardProps {
 	onDispatch?: (incidentId: string) => void;
 	dispatchLoading?: boolean;
 	dispatchInfo?: DispatchInfo;
+	focused?: boolean;
 }
 
-export default function CaseCard({ data, onDispatch, dispatchLoading, dispatchInfo }: CaseCardProps) {
+export default function CaseCard({ data, onDispatch, dispatchLoading, dispatchInfo, focused }: CaseCardProps) {
+	const cardRef = useRef<HTMLDivElement>(null);
 	const [tick, setTick] = useState(0);
 	useEffect(() => {
 		const id = setInterval(() => setTick(t => t + 1), 1000);
 		return () => clearInterval(id);
 	}, []);
+
+	useEffect(() => {
+		if (focused && cardRef.current) {
+			cardRef.current.scrollIntoView({ behavior: "smooth", block: "nearest" });
+		}
+	}, [focused]);
 
 	const phase = dispatchInfo?.phase;
 	const priority = data.priority as CasePriority;
@@ -112,7 +120,7 @@ export default function CaseCard({ data, onDispatch, dispatchLoading, dispatchIn
 	const vehicleId = dispatchInfo?.vehicleId || data.assigned_vehicle_id;
 
 	return (
-		<div className="cc-card" style={{ borderLeftColor: PRIORITY_COLORS[priority] }}>
+		<div ref={cardRef} className={`cc-card${focused ? " cc-card-focused" : ""}`} style={{ borderLeftColor: PRIORITY_COLORS[priority] }}>
 			{/* Row 1: Type + Badges */}
 			<div className="cc-row-top">
 				<span className="cc-type">{data.type}</span>

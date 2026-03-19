@@ -149,6 +149,31 @@ INSERT INTO vehicles (id, lat, lon, status, vehicle_type) VALUES
     ('ambulance-39', 43.3300, -80.3600, 'available', 'ambulance'),
     ('ambulance-40', 43.5100, -80.6200, 'available', 'ambulance');
 
+-- User study tables for A/B dispatch testing with NASA TLX
+CREATE TABLE IF NOT EXISTS user_studies (
+    id VARCHAR(36) PRIMARY KEY,
+    round_order VARCHAR(20) NOT NULL,
+    feedback TEXT,
+    started_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    completed_at TIMESTAMP
+);
+
+CREATE TABLE IF NOT EXISTS user_study_rounds (
+    id SERIAL PRIMARY KEY,
+    study_id VARCHAR(36) NOT NULL REFERENCES user_studies(id) ON DELETE CASCADE,
+    round_number INT NOT NULL,
+    mode VARCHAR(20) NOT NULL,
+    dispatch_times JSONB,
+    avg_dispatch_time_ms FLOAT,
+    tlx_mental_demand INT,
+    tlx_physical_demand INT,
+    tlx_temporal_demand INT,
+    tlx_effort INT,
+    tlx_performance INT,
+    tlx_frustration INT,
+    completed_at TIMESTAMP
+);
+
 -- Indexes
 CREATE INDEX IF NOT EXISTS idx_transcripts_session_id ON transcripts(session_id);
 CREATE INDEX IF NOT EXISTS idx_transcripts_timestamp ON transcripts(timestamp);

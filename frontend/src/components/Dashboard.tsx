@@ -1,4 +1,4 @@
-import { useState, useMemo, useEffect } from "react";
+import { useState, useMemo, useEffect, useCallback } from "react";
 import { Truck, AlertTriangle } from "lucide-react";
 import MapPanel from "./MapPanel";
 import AmbulancePanel, { UnitInfo, VehicleData } from "./AmbulancePanel";
@@ -8,6 +8,7 @@ import { ActiveView, Hospital } from "./types";
 import { useVehicleUpdates } from "../hooks/useVehicleUpdates";
 import { useIncidents } from "../hooks/useIncidents";
 import { useDispatchSuggestion } from "../hooks/useDispatchSuggestion";
+import { useDispatchTest } from "../contexts/DispatchTestContext";
 import "./Dashboard.css";
 
 function vehicleToUnit(v: VehicleData): UnitInfo {
@@ -36,6 +37,7 @@ const Dashboard = () => {
 	const [activeView, setActiveView] = useState<ActiveView>("Cases");
 	const [focusedUnit, setFocusedUnit] = useState<UnitInfo | null>(null);
 	const [focusedIncidentId, setFocusedIncidentId] = useState<string | null>(null);
+	const [focusedIncidentSeq, setFocusedIncidentSeq] = useState(0);
 
 	const [hospitals, setHospitals] = useState<Hospital[]>([]);
 	const apiUrl = import.meta.env.VITE_API_URL || "http://localhost:8000";
@@ -49,16 +51,50 @@ const Dashboard = () => {
 
 	const { vehicles, routes, incidentVehicleMap } = useVehicleUpdates();
 	const units = vehicles.map(vehicleToUnit);
+	const [dispatchingIncidentId, setDispatchingIncidentId] = useState<string | null>(null);
+	const { manualMode } = useDispatchTest();
+
 	const {
 		suggestion,
 		loading: dispatchLoading,
 		findBest,
+		preview,
 		accept,
 		decline,
 		declineAndReassign,
 	} = useDispatchSuggestion();
 
 	const { incidents } = useIncidents();
+
+	const handleDispatch = useCallback((incidentId: string) => {
+		setFocusedIncidentId(incidentId);
+		setFocusedIncidentSeq((s) => s + 1);
+		setDispatchingIncidentId(incidentId);
+		if (!manualMode) {
+			findBest(incidentId);
+		}
+	}, [manualMode, findBest]);
+
+	const handleAccept = useCallback(async () => {
+		await accept();
+		setDispatchingIncidentId(null);
+	}, [accept]);
+
+	const handleDecline = useCallback(async () => {
+		await decline();
+		setDispatchingIncidentId(null);
+	}, [decline]);
+
+	const handleAmbulanceClick = useCallback((unit: UnitInfo) => {
+		if (dispatchingIncidentId) {
+			// Convert display ID back to vehicle id (e.g. "Ambulance 1" -> "ambulance-1")
+			const vehicleId = unit.id.toLowerCase().replace(/\s+/g, "-");
+			preview(dispatchingIncidentId, vehicleId);
+		} else {
+			setActiveView("Ambulances");
+			setFocusedUnit(unit);
+		}
+	}, [dispatchingIncidentId, preview]);
 
 	// Only show call-taker-originated incidents in the cases tab
 	const callTakerIncidents = useMemo(
@@ -163,7 +199,7 @@ const Dashboard = () => {
 							handleViewChange={setActiveView}
 							incidents={callTakerIncidents}
 							loading={false}
-							onDispatch={findBest}
+							onDispatch={handleDispatch}
 							dispatchLoading={dispatchLoading}
 							dispatchInfoMap={dispatchInfoMap}
 							focusedIncidentId={focusedIncidentId}
@@ -189,19 +225,18 @@ const Dashboard = () => {
 					incidents={activeIncidents}
 					hospitals={hospitals}
 					dispatchSuggestion={suggestion}
-					onAcceptSuggestion={accept}
-					onCloseSuggestion={decline}
+					onAcceptSuggestion={handleAccept}
+					onCloseSuggestion={handleDecline}
 					onDeclineSuggestion={declineAndReassign}
 					onIncidentClick={(id) => {
 						setActiveView("Cases");
 						setFocusedIncidentId(id);
 					}}
-					onAmbulanceClick={(unit) => {
-						setActiveView("Ambulances");
-						setFocusedUnit(unit);
-					}}
-					onDispatch={findBest}
-					dispatchLoading={dispatchLoading}
+					onAmbulanceClick={handleAmbulanceClick}
+					focusedIncidentId={focusedIncidentId}
+					focusedIncidentSeq={focusedIncidentSeq}
+					dispatchingIncidentId={dispatchingIncidentId}
+					manualMode={manualMode}
 				/>
 			</div>
 		</div>

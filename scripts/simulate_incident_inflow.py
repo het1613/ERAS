@@ -234,6 +234,17 @@ def create_incident(api_url, data):
     return resp.json()
 
 
+def find_best(api_url, incident_id):
+    """Call find-best for an incident. Returns suggestion data."""
+    resp = requests.post(
+        f"{api_url}/assignments/find-best",
+        json={"incident_id": incident_id},
+        timeout=30,
+    )
+    resp.raise_for_status()
+    return resp.json()
+
+
 def accept_suggestion(api_url, suggestion_id):
     """Accept a dispatch suggestion."""
     resp = requests.post(
@@ -299,7 +310,17 @@ def run(count, delay, api_url):
             print(f"  ✗ Failed to create incident: {e}")
             continue
 
-        suggestion = result.get("dispatch_suggestion")
+        incident_id = result.get("incident", {}).get("id")
+        if not incident_id:
+            print("  ✗ No incident ID in response")
+            continue
+
+        # Find best vehicle for this incident
+        suggestion = None
+        try:
+            suggestion = find_best(api_url, incident_id)
+        except requests.RequestException as e:
+            print(f"  ✗ find-best failed: {e}")
 
         if auto_accept and suggestion:
             suggestion_id = suggestion.get("suggestion_id")

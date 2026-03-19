@@ -5,11 +5,11 @@ import {
 	OverlayView,
 	Marker,
 	Polyline,
-	InfoWindow,
 } from "@react-google-maps/api";
 import "./MapPanel.css";
 import { UnitInfo, UnitStatus } from "./AmbulancePanel";
 import { CaseInfo, CasePriority, DispatchSuggestion, Hospital } from "./types";
+import { Truck } from "lucide-react";
 
 const RAW_PRIORITY_COLORS: Record<CasePriority, string> = {
 	Purple: "#7c3aed",
@@ -102,8 +102,10 @@ interface MapPanelProps {
 	onDeclineSuggestion?: () => void;
 	onIncidentClick?: (incidentId: string) => void;
 	onAmbulanceClick?: (unit: UnitInfo) => void;
-	onDispatch?: (incidentId: string) => void;
-	dispatchLoading?: boolean;
+	focusedIncidentId?: string | null;
+	focusedIncidentSeq?: number;
+	dispatchingIncidentId?: string | null;
+	manualMode?: boolean;
 }
 
 function formatVehicleLabel(id: string) {
@@ -122,14 +124,15 @@ export default function MapPanel({
 	onDeclineSuggestion,
 	onIncidentClick,
 	onAmbulanceClick,
-	onDispatch,
-	dispatchLoading,
+	focusedIncidentId,
+	focusedIncidentSeq,
+	dispatchingIncidentId,
+	manualMode = false,
 }: MapPanelProps) {
 	const apiKey = import.meta.env.VITE_GOOGLE_MAPS_API_KEY;
 	const { isLoaded } = useLoadScript({ googleMapsApiKey: apiKey! });
 	const mapRef = useRef<google.maps.Map | null>(null);
 	const defaultCenter = useMemo(() => ({ lat: 43.4643, lng: -80.5205 }), []);
-	const [hoveredIncidentId, setHoveredIncidentId] = useState<string | null>(null);
 	const [hoveredHospitalId, setHoveredHospitalId] = useState<number | null>(null);
 
 	useEffect(() => {
@@ -139,6 +142,18 @@ export default function MapPanel({
 			mapRef.current.setZoom(15);
 		}
 	}, [focusedUnit]);
+
+	useEffect(() => {
+		if (focusedIncidentId && mapRef.current) {
+			const inc = incidents.find((i) => i.id === focusedIncidentId);
+			if (inc) {
+				mapRef.current.panTo({ lat: inc.lat, lng: inc.lon });
+				mapRef.current.setZoom(14);
+			}
+		}
+		// focusedIncidentSeq ensures re-trigger even for same incident
+		// eslint-disable-next-line react-hooks/exhaustive-deps
+	}, [focusedIncidentId, focusedIncidentSeq]);
 
 	if (!isLoaded) {
 		return (
@@ -150,6 +165,20 @@ export default function MapPanel({
 
 	return (
 		<div style={{ position: "absolute", inset: 0 }}>
+			{dispatchingIncidentId && !dispatchSuggestion && (
+				<div style={{
+					position: "absolute", top: 16, left: "50%", transform: "translateX(-50%)",
+					zIndex: 10, background: "#1e293b", color: "white",
+					padding: "12px 24px", borderRadius: "var(--radius-lg)",
+					boxShadow: "0 4px 24px rgba(0,0,0,0.3)", fontSize: "var(--text-md)", fontWeight: 600,
+					display: "flex", alignItems: "center", gap: 10,
+					border: "2px solid rgba(255,255,255,0.15)",
+					animation: "fade-in var(--transition-base)",
+				}}>
+					<Truck size={18} />
+					Select an ambulance to dispatch
+				</div>
+			)}
 			<GoogleMap
 				zoom={12}
 				center={defaultCenter}
@@ -200,8 +229,8 @@ export default function MapPanel({
 				);
 			})()}
 
-			{/* Preview route (dashed orange) */}
-				{dispatchSuggestion && dispatchSuggestion.routePreview.length > 0 && (
+			{/* Preview route (dashed orange) — hidden in manual mode */}
+				{!manualMode && dispatchSuggestion && dispatchSuggestion.routePreview.length > 0 && (
 					<Polyline key="preview-route" path={dispatchSuggestion.routePreview} options={previewPolylineOptions} />
 				)}
 
@@ -218,52 +247,10 @@ export default function MapPanel({
 							key={`incident-${incident.id}`}
 							position={{ lat: Number(incident.lat), lng: Number(incident.lon) }}
 							icon={getIncidentIcon(color)}
-							title={`${incident.type} - ${incident.priority} Priority`}
-							onMouseOver={() => setHoveredIncidentId(incident.id)}
 							onClick={() => onIncidentClick?.(incident.id)}
 						/>
 					);
 				})}
-
-				{/* Incident Hover Tooltip */}
-				{hoveredIncidentId && (() => {
-					const incident = incidents.find(i => i.id === hoveredIncidentId);
-					if (!incident) return null;
-					const color = RAW_PRIORITY_COLORS[incident.priority] ?? "#888";
-					const canDispatch = incident.status === "open" && onDispatch;
-					return (
-						<OverlayView
-							position={{ lat: Number(incident.lat), lng: Number(incident.lon) }}
-							mapPaneName={OverlayView.OVERLAY_MOUSE_TARGET}
-						>
-							<div
-								style={{ position: "relative", transform: "translate(-50%, calc(-100% - 34px))" }}
-								onMouseLeave={() => setHoveredIncidentId(null)}
-							>
-								<div className="map-incident-tooltip" style={{ position: "relative" }}>
-									<div className="map-it-header">
-										<span className="map-it-dot" style={{ backgroundColor: color }} />
-										<span className="map-it-type">{incident.type}</span>
-									</div>
-									<div className="map-it-meta">
-										<span className="map-it-priority" style={{ color }}>{incident.priority}</span>
-										<span className="map-it-status">{incident.status.replace(/_/g, " ").replace(/\b\w/g, c => c.toUpperCase())}</span>
-									</div>
-									<div className="map-it-location">{incident.location}</div>
-									{canDispatch && (
-										<button
-											className="map-it-dispatch-btn"
-											onClick={() => onDispatch(incident.id)}
-											disabled={dispatchLoading}
-										>
-											{dispatchLoading ? "Finding..." : "Dispatch"}
-										</button>
-									)}
-								</div>
-							</div>
-						</OverlayView>
-					);
-				})()}
 
 				{/* Hospital Markers (hidden when dispatch suggestion is active) */}
 				{!dispatchSuggestion && hospitals.map((hospital) => (
@@ -299,8 +286,8 @@ export default function MapPanel({
 						</div>
 					</OverlayView>
 				))}
-				{/* Reassignment route preview (dashed blue) for reroute suggestions */}
-				{dispatchSuggestion?.isReroute && dispatchSuggestion.reassignment?.routePreview &&
+				{/* Reassignment route preview (dashed blue) for reroute suggestions — hidden in manual mode */}
+				{!manualMode && dispatchSuggestion?.isReroute && dispatchSuggestion.reassignment?.routePreview &&
 					dispatchSuggestion.reassignment.routePreview.length > 0 && (
 					<Polyline
 						key="reassign-preview-route"
@@ -428,7 +415,6 @@ export default function MapPanel({
 											<button className="map-iw-btn map-iw-btn-accept" onClick={onAcceptSuggestion}>
 												{isReroute ? "Accept Reroute" : "Accept"}
 											</button>
-											<button className="map-iw-btn map-iw-btn-another" onClick={onDeclineSuggestion}>Suggest Another</button>
 										</div>
 									</div>
 								</div>
