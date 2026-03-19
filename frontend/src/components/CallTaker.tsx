@@ -767,30 +767,18 @@ const CallTaker: React.FC = () => {
                       <MapPin size={11} />
                       <span>Location</span>
                     </div>
-                    {manualEditingLocation ? (
-                      <div className="ct-field-edit-row">
-                        <input
-                          type="text"
-                          className="ct-input"
-                          value={manualForm.location}
-                          onChange={e => setManualForm(prev => ({ ...prev, location: e.target.value }))}
-                          onBlur={e => geocodeManualLocation(e.target.value)}
-                          autoFocus
-                          placeholder="e.g. 234 Columbia St"
-                        />
-                        <button className="ct-icon-btn" onClick={() => setManualEditingLocation(false)}><Check size={13} /></button>
-                      </div>
-                    ) : (
-                      <div className="ct-location-display">
-                        <span className="ct-location-address">
-                          {manualForm.location || <span className="ct-placeholder">No location set</span>}
-                        </span>
-                        <button className="ct-icon-btn" onClick={() => setManualEditingLocation(true)}>
-                          <Pencil size={12} />
-                        </button>
-                        {manualGeocodingInProgress && <span className="ct-spinner" />}
-                      </div>
-                    )}
+                    <div className="ct-field-edit-row">
+                      <input
+                        type="text"
+                        className="ct-input"
+                        value={manualForm.location}
+                        onChange={e => setManualForm(prev => ({ ...prev, location: e.target.value }))}
+                        onBlur={e => geocodeManualLocation(e.target.value)}
+                        onKeyDown={e => { if (e.key === 'Enter') (e.target as HTMLInputElement).blur(); }}
+                        placeholder="e.g. 234 Columbia St"
+                      />
+                      {manualGeocodingInProgress && <span className="ct-spinner" />}
+                    </div>
                     <button className="ct-coords-toggle" onClick={() => setManualShowCoords(prev => !prev)}>
                       {manualShowCoords ? <ChevronDown size={11} /> : <ChevronRight size={11} />}
                       <span>{manualForm.lat}, {manualForm.lon}</span>
@@ -1025,12 +1013,12 @@ const CallTaker: React.FC = () => {
                     />
                   </div>
 
-                  {/* Caution Notes */}
+                  {/* Additional Notes */}
                   <div className="ct-field">
-                    <div className="ct-field-label"><span>Caution Notes</span></div>
+                    <div className="ct-field-label"><span>Additional Notes</span></div>
                     <textarea
                       className="ct-input ct-textarea"
-                      placeholder="Additional caution notes..."
+                      placeholder="Additional notes..."
                       rows={3}
                       value={manualForm.cautionNotes}
                       onChange={e => setManualForm(prev => ({ ...prev, cautionNotes: e.target.value }))}
