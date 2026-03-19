@@ -106,6 +106,7 @@ interface MapPanelProps {
 	onDispatch?: (incidentId: string) => void;
 	dispatchLoading?: boolean;
 	focusedIncidentId?: string | null;
+	focusedIncidentSeq?: number;
 	dispatchingIncidentId?: string | null;
 }
 
@@ -128,6 +129,7 @@ export default function MapPanel({
 	onDispatch,
 	dispatchLoading,
 	focusedIncidentId,
+	focusedIncidentSeq,
 	dispatchingIncidentId,
 }: MapPanelProps) {
 	const apiKey = import.meta.env.VITE_GOOGLE_MAPS_API_KEY;
@@ -153,7 +155,9 @@ export default function MapPanel({
 				mapRef.current.setZoom(14);
 			}
 		}
-	}, [focusedIncidentId, incidents]);
+		// focusedIncidentSeq ensures re-trigger even for same incident
+		// eslint-disable-next-line react-hooks/exhaustive-deps
+	}, [focusedIncidentId, focusedIncidentSeq]);
 
 	if (!isLoaded) {
 		return (

@@ -1,6 +1,6 @@
 import { useState } from 'react';
 import { NavLink } from 'react-router-dom';
-import { LayoutDashboard, Headset, Phone, RotateCcw, Archive, Play } from 'lucide-react';
+import { LayoutDashboard, Headset, Phone, RotateCcw, Archive, Play, Hand } from 'lucide-react';
 import { useWebSocket } from '../contexts/WebSocketContext';
 import { useDispatchTest } from '../contexts/DispatchTestContext';
 import './NavBar.css';
@@ -14,7 +14,7 @@ const NAV_LINKS = [
 
 export default function NavBar() {
   const { connected } = useWebSocket();
-  const { phase, createdCount, dispatchedCount, startTest } = useDispatchTest();
+  const { phase, createdCount, dispatchedCount, manualMode, toggleManualMode, startTest } = useDispatchTest();
   const [resetting, setResetting] = useState(false);
   const apiUrl = import.meta.env.VITE_API_URL || 'http://localhost:8000';
   const testActive = phase === 'running' || phase === 'waiting' || phase === 'resetting';
@@ -55,6 +55,14 @@ export default function NavBar() {
       </div>
 
       <div className="eras-navbar-status">
+        <button
+          className={`eras-navbar-reset${manualMode ? ' eras-navbar-toggle-active' : ''}`}
+          onClick={toggleManualMode}
+          title={manualMode ? 'Switch to optimizer mode' : 'Switch to manual mode'}
+        >
+          <Hand size={13} />
+          <span>Manual</span>
+        </button>
         <button
           className="eras-navbar-reset"
           onClick={startTest}

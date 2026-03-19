@@ -80,6 +80,8 @@ export function useDispatchSuggestion(): UseDispatchSuggestionResult {
 
 	const findBest = useCallback(
 		async (incidentId: string) => {
+			// Clear any stale suggestion so the new one is always shown
+			setQueue([]);
 			setLoading(true);
 			try {
 				const res = await fetch(`${apiUrl}/assignments/find-best`, {
@@ -92,7 +94,7 @@ export function useDispatchSuggestion(): UseDispatchSuggestionResult {
 					throw new Error(err.detail || `HTTP ${res.status}`);
 				}
 				const data = await res.json();
-				setQueue((prev) => [...prev, parseSuggestionData(data)]);
+				setQueue([parseSuggestionData(data)]);
 			} catch (err) {
 				console.error("Failed to find best assignment:", err);
 				alert(

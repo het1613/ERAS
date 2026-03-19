@@ -8,6 +8,7 @@ import { ActiveView, Hospital } from "./types";
 import { useVehicleUpdates } from "../hooks/useVehicleUpdates";
 import { useIncidents } from "../hooks/useIncidents";
 import { useDispatchSuggestion } from "../hooks/useDispatchSuggestion";
+import { useDispatchTest } from "../contexts/DispatchTestContext";
 import "./Dashboard.css";
 
 function vehicleToUnit(v: VehicleData): UnitInfo {
@@ -36,6 +37,7 @@ const Dashboard = () => {
 	const [activeView, setActiveView] = useState<ActiveView>("Cases");
 	const [focusedUnit, setFocusedUnit] = useState<UnitInfo | null>(null);
 	const [focusedIncidentId, setFocusedIncidentId] = useState<string | null>(null);
+	const [focusedIncidentSeq, setFocusedIncidentSeq] = useState(0);
 
 	const [hospitals, setHospitals] = useState<Hospital[]>([]);
 	const apiUrl = import.meta.env.VITE_API_URL || "http://localhost:8000";
@@ -50,10 +52,12 @@ const Dashboard = () => {
 	const { vehicles, routes, incidentVehicleMap } = useVehicleUpdates();
 	const units = vehicles.map(vehicleToUnit);
 	const [dispatchingIncidentId, setDispatchingIncidentId] = useState<string | null>(null);
+	const { manualMode } = useDispatchTest();
 
 	const {
 		suggestion,
 		loading: dispatchLoading,
+		findBest,
 		preview,
 		accept,
 		decline,
@@ -64,8 +68,12 @@ const Dashboard = () => {
 
 	const handleDispatch = useCallback((incidentId: string) => {
 		setFocusedIncidentId(incidentId);
+		setFocusedIncidentSeq((s) => s + 1);
 		setDispatchingIncidentId(incidentId);
-	}, []);
+		if (!manualMode) {
+			findBest(incidentId);
+		}
+	}, [manualMode, findBest]);
 
 	const handleAccept = useCallback(async () => {
 		await accept();
@@ -228,6 +236,7 @@ const Dashboard = () => {
 					onDispatch={handleDispatch}
 					dispatchLoading={dispatchLoading}
 					focusedIncidentId={focusedIncidentId}
+					focusedIncidentSeq={focusedIncidentSeq}
 					dispatchingIncidentId={dispatchingIncidentId}
 				/>
 			</div>

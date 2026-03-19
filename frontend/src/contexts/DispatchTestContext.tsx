@@ -25,6 +25,8 @@ interface DispatchTestContextValue {
 	incidents: TestIncident[];
 	createdCount: number;
 	dispatchedCount: number;
+	manualMode: boolean;
+	toggleManualMode: () => void;
 	startTest: () => void;
 	dismissResults: () => void;
 }
@@ -83,6 +85,7 @@ const TIMEOUT_MS = 120_000;
 export function DispatchTestProvider({ children }: { children: ReactNode }) {
 	const [phase, setPhase] = useState<TestPhase>("idle");
 	const [incidents, setIncidents] = useState<TestIncident[]>([]);
+	const [manualMode, setManualMode] = useState(false);
 	const intervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
 	const timeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 	const createIndexRef = useRef(0);
@@ -229,6 +232,10 @@ export function DispatchTestProvider({ children }: { children: ReactNode }) {
 		createIndexRef.current = 0;
 	}, []);
 
+	const toggleManualMode = useCallback(() => {
+		setManualMode((prev) => !prev);
+	}, []);
+
 	const createdCount = incidents.length;
 	const dispatchedCount = incidents.filter((t) => t.dispatchedAt !== null).length;
 
@@ -239,6 +246,8 @@ export function DispatchTestProvider({ children }: { children: ReactNode }) {
 				incidents,
 				createdCount,
 				dispatchedCount,
+				manualMode,
+				toggleManualMode,
 				startTest,
 				dismissResults,
 			}}
