@@ -413,7 +413,6 @@ export default function MapPanel({
 											<button className="map-iw-btn map-iw-btn-accept" onClick={onAcceptSuggestion}>
 												{isReroute ? "Accept Reroute" : "Accept"}
 											</button>
-											<button className="map-iw-btn map-iw-btn-another" onClick={onDeclineSuggestion}>Suggest Another</button>
 										</div>
 									</div>
 								</div>
