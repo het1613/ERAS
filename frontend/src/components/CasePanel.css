@@ -32,6 +32,11 @@
   box-shadow: var(--shadow-sm);
 }
 
+.cc-card-focused {
+  border: 2px solid #2563eb;
+  border-left: 4px solid #2563eb;
+}
+
 .cc-row-top {
   display: flex;
   align-items: flex-start;

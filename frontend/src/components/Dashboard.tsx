@@ -233,8 +233,6 @@ const Dashboard = () => {
 						setFocusedIncidentId(id);
 					}}
 					onAmbulanceClick={handleAmbulanceClick}
-					onDispatch={handleDispatch}
-					dispatchLoading={dispatchLoading}
 					focusedIncidentId={focusedIncidentId}
 					focusedIncidentSeq={focusedIncidentSeq}
 					dispatchingIncidentId={dispatchingIncidentId}

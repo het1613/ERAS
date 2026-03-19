@@ -5,7 +5,6 @@ import {
 	OverlayView,
 	Marker,
 	Polyline,
-	InfoWindow,
 } from "@react-google-maps/api";
 import "./MapPanel.css";
 import { UnitInfo, UnitStatus } from "./AmbulancePanel";
@@ -103,8 +102,6 @@ interface MapPanelProps {
 	onDeclineSuggestion?: () => void;
 	onIncidentClick?: (incidentId: string) => void;
 	onAmbulanceClick?: (unit: UnitInfo) => void;
-	onDispatch?: (incidentId: string) => void;
-	dispatchLoading?: boolean;
 	focusedIncidentId?: string | null;
 	focusedIncidentSeq?: number;
 	dispatchingIncidentId?: string | null;
@@ -126,8 +123,6 @@ export default function MapPanel({
 	onDeclineSuggestion,
 	onIncidentClick,
 	onAmbulanceClick,
-	onDispatch,
-	dispatchLoading,
 	focusedIncidentId,
 	focusedIncidentSeq,
 	dispatchingIncidentId,
@@ -136,7 +131,6 @@ export default function MapPanel({
 	const { isLoaded } = useLoadScript({ googleMapsApiKey: apiKey! });
 	const mapRef = useRef<google.maps.Map | null>(null);
 	const defaultCenter = useMemo(() => ({ lat: 43.4643, lng: -80.5205 }), []);
-	const [hoveredIncidentId, setHoveredIncidentId] = useState<string | null>(null);
 	const [hoveredHospitalId, setHoveredHospitalId] = useState<number | null>(null);
 
 	useEffect(() => {
@@ -251,52 +245,10 @@ export default function MapPanel({
 							key={`incident-${incident.id}`}
 							position={{ lat: Number(incident.lat), lng: Number(incident.lon) }}
 							icon={getIncidentIcon(color)}
-							title={`${incident.type} - ${incident.priority} Priority`}
-							onMouseOver={() => setHoveredIncidentId(incident.id)}
 							onClick={() => onIncidentClick?.(incident.id)}
 						/>
 					);
 				})}
-
-				{/* Incident Hover Tooltip */}
-				{hoveredIncidentId && (() => {
-					const incident = incidents.find(i => i.id === hoveredIncidentId);
-					if (!incident) return null;
-					const color = RAW_PRIORITY_COLORS[incident.priority] ?? "#888";
-					const canDispatch = incident.status === "open" && onDispatch;
-					return (
-						<OverlayView
-							position={{ lat: Number(incident.lat), lng: Number(incident.lon) }}
-							mapPaneName={OverlayView.OVERLAY_MOUSE_TARGET}
-						>
-							<div
-								style={{ position: "relative", transform: "translate(-50%, calc(-100% - 34px))" }}
-								onMouseLeave={() => setHoveredIncidentId(null)}
-							>
-								<div className="map-incident-tooltip" style={{ position: "relative" }}>
-									<div className="map-it-header">
-										<span className="map-it-dot" style={{ backgroundColor: color }} />
-										<span className="map-it-type">{incident.type}</span>
-									</div>
-									<div className="map-it-meta">
-										<span className="map-it-priority" style={{ color }}>{incident.priority}</span>
-										<span className="map-it-status">{incident.status.replace(/_/g, " ").replace(/\b\w/g, c => c.toUpperCase())}</span>
-									</div>
-									<div className="map-it-location">{incident.location}</div>
-									{canDispatch && (
-										<button
-											className="map-it-dispatch-btn"
-											onClick={() => onDispatch(incident.id)}
-											disabled={dispatchLoading}
-										>
-											{dispatchLoading ? "Finding..." : "Dispatch"}
-										</button>
-									)}
-								</div>
-							</div>
-						</OverlayView>
-					);
-				})()}
 
 				{/* Hospital Markers (hidden when dispatch suggestion is active) */}
 				{!dispatchSuggestion && hospitals.map((hospital) => (

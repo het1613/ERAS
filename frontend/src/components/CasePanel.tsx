@@ -1,4 +1,4 @@
-import { useMemo, useRef, useEffect } from "react";
+import { useMemo } from "react";
 import CaseCard, { DispatchInfo } from "./CaseCard";
 import { CaseInfo, CasePriority, PRIORITY_COLORS, ActiveView } from "./types";
 import Badge from "./ui/Badge";
@@ -24,8 +24,6 @@ export default function CasesPanel({
 	dispatchInfoMap = {},
 	focusedIncidentId,
 }: PanelProps): JSX.Element {
-	const caseListRef = useRef<HTMLDivElement>(null);
-
 	const { active, priorityCounts } = useMemo(() => {
 		const active: CaseInfo[] = [];
 		const counts: Partial<Record<CasePriority, number>> = {};
@@ -40,11 +38,6 @@ export default function CasesPanel({
 		return { active, priorityCounts: counts };
 	}, [incidents]);
 
-	useEffect(() => {
-		if (focusedIncidentId && caseListRef.current) {
-			caseListRef.current.scrollTo({ top: 0, behavior: "smooth" });
-		}
-	}, [focusedIncidentId]);
 
 	return (
 		<div className="dp-section">
@@ -66,7 +59,7 @@ export default function CasesPanel({
 				<span className="dp-section-title">Active Cases</span>
 				{active.length > 0 && <Badge variant="warning" size="sm">{active.length}</Badge>}
 			</div>
-			<div className="dp-case-list" ref={caseListRef}>
+			<div className="dp-case-list">
 				{loading ? (
 					<EmptyState title="Loading incidents..." />
 				) : active.length === 0 ? (
@@ -79,6 +72,7 @@ export default function CasesPanel({
 							onDispatch={onDispatch}
 							dispatchLoading={dispatchLoading}
 							dispatchInfo={dispatchInfoMap[c.id]}
+							focused={c.id === focusedIncidentId}
 						/>
 					))
 				)}
