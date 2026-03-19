@@ -68,7 +68,7 @@ Seeded in `init.sql` with 4 hospitals: St. Mary's General, Cambridge Memorial, G
 
 Priority-to-weight mapping (auto-set when weight omitted): Purple=16, Red=8, Orange=4, Yellow=2, Green=1. Defined in `shared/types.py:PRIORITY_WEIGHT_MAP`.
 
-**Important:** `init.sql` only runs on first postgres volume creation. For existing volumes, run migrations: `docker exec eras-postgres psql -U eras_user -d eras_db < infrastructure/postgres/migrate_v2.sql` (expanded suggestions, dispatches, incident_events tables) and `migrate_v4.sql` (seed 40 vehicles). Or recreate the volume: `docker compose down -v && docker compose up`.
+**Important:** `init.sql` only runs on first postgres volume creation. For existing volumes, run migrations: `docker exec eras-postgres psql -U eras_user -d eras_db < infrastructure/postgres/migrate_v2.sql` (expanded suggestions, dispatches, incident_events tables) and `migrate_v4.sql` (seed 40 vehicles), `migrate_v6.sql` (reduce to 25 vehicles). Or recreate the volume: `docker compose down -v && docker compose up`.
 
 ## Incidents Flow
 
@@ -97,7 +97,7 @@ All assignment endpoints are proxied through dashboard-api (:8000) so the fronte
 
 ## Vehicle Tracking
 
-The vehicle roster (40 ambulances across the Waterloo Region) is seeded in PostgreSQL (`vehicles` table) and loaded at startup by both geospatial-dispatch and the simulator. Real-time positions are updated via the `vehicle-locations` Kafka topic. `VehicleLocationTracker` runs a background Kafka consumer that updates `Vehicle.lat`/`.lon` in-place.
+The vehicle roster (25 ambulances across the Waterloo Region) is seeded in PostgreSQL (`vehicles` table) and loaded at startup by both geospatial-dispatch and the simulator. Real-time positions are updated via the `vehicle-locations` Kafka topic. `VehicleLocationTracker` runs a background Kafka consumer that updates `Vehicle.lat`/`.lon` in-place.
 
 **Adding/removing vehicles:** Edit the seed data in `init.sql` (for fresh volumes) and `migrate_v4.sql` (for existing volumes). Both geospatial-dispatch and the simulator load from DB on startup with retry logic.
 
@@ -265,7 +265,7 @@ curl http://localhost:8000/hospitals
 
 ## Known Limitations / TODOs
 
-- Vehicle roster is seeded in DB (40 ambulances); adding/removing requires editing SQL seed files and restarting services
+- Vehicle roster is seeded in DB (25 ambulances); adding/removing requires editing SQL seed files and restarting services
 - Vehicle statuses in dashboard-api are still in-memory (ephemeral) — they rebuild from Kafka on restart, which is acceptable for real-time positions
 - Hospital roster is dynamic (from DB) but geospatial-dispatch queries the DB on every `find-best` call — could cache if performance matters
 - `on_event` startup/shutdown handlers are deprecated — should migrate to FastAPI lifespan
