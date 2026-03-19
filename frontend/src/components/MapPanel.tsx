@@ -171,14 +171,16 @@ export default function MapPanel({
 		<div style={{ position: "absolute", inset: 0 }}>
 			{dispatchingIncidentId && !dispatchSuggestion && (
 				<div style={{
-					position: "absolute", top: 12, left: "50%", transform: "translateX(-50%)",
-					zIndex: 10, background: "var(--surface-elevated)", color: "var(--text-primary)",
-					padding: "8px 16px", borderRadius: "var(--radius-lg)",
-					boxShadow: "var(--shadow-lg)", fontSize: "var(--text-sm)", fontWeight: 500,
-					display: "flex", alignItems: "center", gap: 8,
+					position: "absolute", top: 16, left: "50%", transform: "translateX(-50%)",
+					zIndex: 10, background: "#1e293b", color: "white",
+					padding: "12px 24px", borderRadius: "var(--radius-lg)",
+					boxShadow: "0 4px 24px rgba(0,0,0,0.3)", fontSize: "var(--text-md)", fontWeight: 600,
+					display: "flex", alignItems: "center", gap: 10,
+					border: "2px solid rgba(255,255,255,0.15)",
+					animation: "fade-in var(--transition-base)",
 				}}>
-					<Truck size={14} />
-					Click an ambulance to dispatch
+					<Truck size={18} />
+					Select an ambulance to dispatch
 				</div>
 			)}
 			<GoogleMap
