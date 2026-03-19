@@ -141,7 +141,7 @@ export default function CaseCard({ data, onDispatch, dispatchLoading, dispatchIn
 					<MapPin size={12} className="cc-detail-icon" />
 					<span>{data.location || "Unknown location"}</span>
 				</div>
-				<div className={`cc-detail${(priority === "Red" || priority === "Purple") && data.reported_at && (Date.now() - parseUtc(data.reported_at).getTime()) >= 45000 ? " cc-time-urgent" : ""}`}>
+				<div className={`cc-detail${(priority === "Red" || priority === "Purple") && data.status === "open" && data.reported_at && (Date.now() - parseUtc(data.reported_at).getTime()) >= 45000 ? " cc-time-urgent" : ""}`}>
 					<Clock size={12} className="cc-detail-icon" />
 					<span>{timeAgo(data.reported_at, tick)}</span>
 				</div>

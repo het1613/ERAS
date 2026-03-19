@@ -70,6 +70,9 @@ route_lock = threading.Lock()
 vehicle_states = {}
 state_lock = threading.Lock()
 
+# Original DB positions keyed by vehicle_id
+home_positions = {}
+
 
 def haversine_m(lat1, lon1, lat2, lon2):
     R = 6_371_000
@@ -126,6 +129,8 @@ def dispatch_consumer_thread():
                     continue
 
                 with route_lock:
+                    # Clear any existing home route before setting dispatch route
+                    vehicle_routes.pop(vehicle_id, None)
                     vehicle_routes[vehicle_id] = {
                         "route": deque(route),
                         "incident_id": incident_id,
@@ -200,6 +205,10 @@ def main():
     if not VEHICLES:
         print("ERROR: No vehicles found in DB. Exiting.")
         return
+
+    # Store original positions so vehicles can return home after a case
+    for v in VEHICLES:
+        home_positions[v["vehicle_id"]] = (v["lat"], v["lon"])
 
     print(f"Creating Kafka producer for topic '{LOCATION_TOPIC}'...")
     producer = create_producer()
@@ -354,28 +363,72 @@ def main():
 
                         with state_lock:
                             vehicle_states[vid] = {
-                                "status": "returning",
-                                "incident_id": None,
-                                "timer": now + RETURNING_DURATION_S,
-                            }
-                        print(f"  [{vid}] AT_HOSPITAL complete — RESOLVED, returning for {RETURNING_DURATION_S}s")
-
-                elif status == "returning":
-                    v["lat"] += random.uniform(-STEP_LAT, STEP_LAT)
-                    v["lon"] += random.uniform(-STEP_LON, STEP_LON)
-                    if state["timer"] and now >= state["timer"]:
-                        with state_lock:
-                            vehicle_states[vid] = {
                                 "status": "available",
                                 "incident_id": None,
-                                "timer": None,
+                                "timer": now + 10,  # wait 10s before heading home
+                                "returning_home": True,
+                                "route_fetched": False,
                             }
-                        print(f"  [{vid}] Back AVAILABLE")
+                        print(f"  [{vid}] AT_HOSPITAL complete — RESOLVED, available (returning home in 10s)")
 
                 else:
-                    # available -> random walk
-                    v["lat"] += random.uniform(-STEP_LAT, STEP_LAT)
-                    v["lon"] += random.uniform(-STEP_LON, STEP_LON)
+                    # available — may be returning home or idle
+                    if state.get("returning_home"):
+                        if state.get("timer") and now < state["timer"]:
+                            # Waiting 10s before heading home — stay put
+                            pass
+                        elif not state.get("route_fetched"):
+                            # 10s elapsed, fetch route back to home position
+                            home = home_positions.get(vid)
+                            if home:
+                                home_route = fetch_osrm_route(v["lat"], v["lon"], home[0], home[1])
+                                if home_route:
+                                    with route_lock:
+                                        vehicle_routes[vid] = {
+                                            "route": deque(home_route),
+                                            "incident_id": None,
+                                        }
+                                    print(f"  [{vid}] Heading home ({len(home_route)} waypoints)")
+                                else:
+                                    # No route available, snap directly to home
+                                    v["lat"], v["lon"] = home
+                                    print(f"  [{vid}] No OSRM route, snapping home")
+                            with state_lock:
+                                vehicle_states[vid] = {
+                                    "status": "available",
+                                    "incident_id": None,
+                                    "timer": None,
+                                    "returning_home": True,
+                                    "route_fetched": True,
+                                }
+                        else:
+                            # Follow route home
+                            with route_lock:
+                                entry = vehicle_routes.get(vid)
+                            if entry is not None:
+                                still_going = advance_along_route(v, entry["route"])
+                                if not still_going:
+                                    with route_lock:
+                                        del vehicle_routes[vid]
+                                    # Snap to exact home position
+                                    home = home_positions.get(vid)
+                                    if home:
+                                        v["lat"], v["lon"] = home
+                                    with state_lock:
+                                        vehicle_states[vid] = {
+                                            "status": "available",
+                                            "incident_id": None,
+                                            "timer": None,
+                                        }
+                                    print(f"  [{vid}] Back at home position")
+                            else:
+                                # No route entry, already at home
+                                with state_lock:
+                                    vehicle_states[vid] = {
+                                        "status": "available",
+                                        "incident_id": None,
+                                        "timer": None,
+                                    }
 
                 current_status = get_vehicle_status(vid)
                 message = {
