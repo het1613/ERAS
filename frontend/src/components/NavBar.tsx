@@ -1,6 +1,6 @@
 import { useState } from 'react';
 import { NavLink } from 'react-router-dom';
-import { LayoutDashboard, Headset, Phone, RotateCcw, Archive, Play, Hand } from 'lucide-react';
+import { LayoutDashboard, Headset, Phone, RotateCcw, Archive, Play } from 'lucide-react';
 import { useWebSocket } from '../contexts/WebSocketContext';
 import { useDispatchTest } from '../contexts/DispatchTestContext';
 import './NavBar.css';
@@ -56,11 +56,13 @@ export default function NavBar() {
 
       <div className="eras-navbar-status">
         <button
-          className={`eras-navbar-reset${manualMode ? ' eras-navbar-toggle-active' : ''}`}
+          className={`eras-navbar-toggle${manualMode ? ' eras-navbar-toggle-on' : ''}`}
           onClick={toggleManualMode}
           title={manualMode ? 'Switch to optimizer mode' : 'Switch to manual mode'}
         >
-          <Hand size={13} />
+          <span className="eras-navbar-toggle-track">
+            <span className="eras-navbar-toggle-thumb" />
+          </span>
           <span>Manual</span>
         </button>
         <button
