@@ -104,6 +104,7 @@ interface MapPanelProps {
 	onAmbulanceClick?: (unit: UnitInfo) => void;
 	onDispatch?: (incidentId: string) => void;
 	dispatchLoading?: boolean;
+	focusedIncidentId?: string | null;
 }
 
 function formatVehicleLabel(id: string) {
@@ -124,6 +125,7 @@ export default function MapPanel({
 	onAmbulanceClick,
 	onDispatch,
 	dispatchLoading,
+	focusedIncidentId,
 }: MapPanelProps) {
 	const apiKey = import.meta.env.VITE_GOOGLE_MAPS_API_KEY;
 	const { isLoaded } = useLoadScript({ googleMapsApiKey: apiKey! });
@@ -139,6 +141,16 @@ export default function MapPanel({
 			mapRef.current.setZoom(15);
 		}
 	}, [focusedUnit]);
+
+	useEffect(() => {
+		if (focusedIncidentId && mapRef.current) {
+			const inc = incidents.find((i) => i.id === focusedIncidentId);
+			if (inc) {
+				mapRef.current.panTo({ lat: inc.lat, lng: inc.lon });
+				mapRef.current.setZoom(14);
+			}
+		}
+	}, [focusedIncidentId, incidents]);
 
 	if (!isLoaded) {
 		return (

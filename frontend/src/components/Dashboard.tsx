@@ -1,4 +1,4 @@
-import { useState, useMemo, useEffect } from "react";
+import { useState, useMemo, useEffect, useCallback } from "react";
 import { Truck, AlertTriangle } from "lucide-react";
 import MapPanel from "./MapPanel";
 import AmbulancePanel, { UnitInfo, VehicleData } from "./AmbulancePanel";
@@ -59,6 +59,11 @@ const Dashboard = () => {
 	} = useDispatchSuggestion();
 
 	const { incidents } = useIncidents();
+
+	const handleDispatch = useCallback((incidentId: string) => {
+		setFocusedIncidentId(incidentId);
+		findBest(incidentId);
+	}, [findBest]);
 
 	// Only show call-taker-originated incidents in the cases tab
 	const callTakerIncidents = useMemo(
@@ -163,7 +168,7 @@ const Dashboard = () => {
 							handleViewChange={setActiveView}
 							incidents={callTakerIncidents}
 							loading={false}
-							onDispatch={findBest}
+							onDispatch={handleDispatch}
 							dispatchLoading={dispatchLoading}
 							dispatchInfoMap={dispatchInfoMap}
 							focusedIncidentId={focusedIncidentId}
@@ -200,8 +205,9 @@ const Dashboard = () => {
 						setActiveView("Ambulances");
 						setFocusedUnit(unit);
 					}}
-					onDispatch={findBest}
+					onDispatch={handleDispatch}
 					dispatchLoading={dispatchLoading}
+					focusedIncidentId={focusedIncidentId}
 				/>
 			</div>
 		</div>

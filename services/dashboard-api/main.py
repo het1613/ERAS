@@ -307,11 +307,7 @@ async def create_incident(req: CreateIncidentRequest):
     await manager.broadcast({"type": "incident_created", "data": incident_dict})
     logger.info(f"Created incident {incident_id} (source={source})")
 
-    dispatch_data = None
-    if source == "call_taker":
-        dispatch_data = await _find_best_and_broadcast(incident_id)
-
-    return {"incident": incident_dict, "dispatch_suggestion": dispatch_data}
+    return {"incident": incident_dict}
 
 
 @app.patch("/incidents/{incident_id}")
@@ -794,11 +790,9 @@ async def accept_suggestion(suggestion_id: str, req: AcceptSuggestionRequest):
 
     logger.info(f"Accepted suggestion {suggestion_id}, created incident {incident_id}")
 
-    dispatch_data = await _find_best_and_broadcast(incident_id)
     return {
         "incident": incident_dict,
         "suggestion_status": "accepted",
-        "dispatch_suggestion": dispatch_data,
     }
 
 
