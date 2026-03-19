@@ -110,6 +110,15 @@ const CallTaker: React.FC = () => {
     lat: string;
     lon: string;
     location: string;
+    age: string;
+    sex: '' | 'Male' | 'Female';
+    isApartment: boolean;
+    apartmentNumber: string;
+    doorPin: string;
+    conscious: 'Yes' | 'No' | 'Unknown';
+    breathing: 'Yes' | 'No' | 'Unknown';
+    phoneNumber: string;
+    cautionNotes: string;
   }>>({});
 
   const [revisions, setRevisions] = useState<Record<string, Revision[]>>({});
@@ -203,6 +212,15 @@ const CallTaker: React.FC = () => {
           lat: s.extracted_lat != null ? String(s.extracted_lat) : '43.4643',
           lon: s.extracted_lon != null ? String(s.extracted_lon) : '-80.5205',
           location: s.extracted_location || '',
+          age: '',
+          sex: '',
+          isApartment: false,
+          apartmentNumber: '',
+          doorPin: '',
+          conscious: 'Unknown',
+          breathing: 'Unknown',
+          phoneNumber: '',
+          cautionNotes: '',
         },
       };
     });
@@ -1019,7 +1037,7 @@ const CallTaker: React.FC = () => {
                     <textarea
                       className="ct-input ct-textarea"
                       placeholder="Additional notes..."
-                      rows={3}
+                      rows={2}
                       value={manualForm.cautionNotes}
                       onChange={e => setManualForm(prev => ({ ...prev, cautionNotes: e.target.value }))}
                     />
@@ -1267,6 +1285,134 @@ const CallTaker: React.FC = () => {
                           {PRIORITIES.map(p => <option key={p} value={p}>{p}</option>)}
                         </select>
                       </div>
+                    </div>
+
+                    {/* Age */}
+                    <div className="ct-field">
+                      <div className="ct-field-label"><span>Age</span></div>
+                      <input
+                        type="number"
+                        className="ct-input ct-input-sm"
+                        placeholder="Age"
+                        min={0}
+                        max={150}
+                        value={override.age}
+                        onChange={e => setOverrides(prev => ({ ...prev, [s.id]: { ...prev[s.id], age: e.target.value } }))}
+                      />
+                    </div>
+
+                    {/* Sex */}
+                    <div className="ct-field">
+                      <div className="ct-field-label"><span>Sex</span></div>
+                      <div className="ct-checkbox-group">
+                        <label className="ct-checkbox-label">
+                          <input
+                            type="checkbox"
+                            checked={override.sex === 'Male'}
+                            onChange={() => setOverrides(prev => ({ ...prev, [s.id]: { ...prev[s.id], sex: prev[s.id].sex === 'Male' ? '' : 'Male' } }))}
+                          />
+                          <span>Male</span>
+                        </label>
+                        <label className="ct-checkbox-label">
+                          <input
+                            type="checkbox"
+                            checked={override.sex === 'Female'}
+                            onChange={() => setOverrides(prev => ({ ...prev, [s.id]: { ...prev[s.id], sex: prev[s.id].sex === 'Female' ? '' : 'Female' } }))}
+                          />
+                          <span>Female</span>
+                        </label>
+                      </div>
+                    </div>
+
+                    {/* Apartment */}
+                    <div className="ct-field">
+                      <div className="ct-field-label"><span>Apartment</span></div>
+                      <div className="ct-apartment-row">
+                        <label className="ct-checkbox-label">
+                          <input
+                            type="checkbox"
+                            checked={override.isApartment}
+                            onChange={e => setOverrides(prev => ({ ...prev, [s.id]: { ...prev[s.id], isApartment: e.target.checked, apartmentNumber: e.target.checked ? prev[s.id].apartmentNumber : '', doorPin: e.target.checked ? prev[s.id].doorPin : '' } }))}
+                          />
+                          <span>Yes</span>
+                        </label>
+                        {override.isApartment && (
+                          <>
+                            <input
+                              type="text"
+                              className="ct-input ct-input-sm ct-apartment-input"
+                              placeholder="Apt #"
+                              value={override.apartmentNumber}
+                              onChange={e => setOverrides(prev => ({ ...prev, [s.id]: { ...prev[s.id], apartmentNumber: e.target.value } }))}
+                            />
+                            <input
+                              type="text"
+                              className="ct-input ct-input-sm ct-apartment-input"
+                              placeholder="Door PIN"
+                              value={override.doorPin}
+                              onChange={e => setOverrides(prev => ({ ...prev, [s.id]: { ...prev[s.id], doorPin: e.target.value } }))}
+                            />
+                          </>
+                        )}
+                      </div>
+                    </div>
+
+                    {/* Consciousness & Breathing */}
+                    <div className="ct-field">
+                      <div className="ct-field-label"><span>Consciousness</span></div>
+                      <div className="ct-radio-group">
+                        {(['Yes', 'No', 'Unknown'] as const).map(val => (
+                          <label key={val} className="ct-radio-label">
+                            <input
+                              type="radio"
+                              name={`conscious-${s.id}`}
+                              checked={override.conscious === val}
+                              onChange={() => setOverrides(prev => ({ ...prev, [s.id]: { ...prev[s.id], conscious: val } }))}
+                            />
+                            <span>{val}</span>
+                          </label>
+                        ))}
+                      </div>
+                    </div>
+                    <div className="ct-field">
+                      <div className="ct-field-label"><span>Breathing</span></div>
+                      <div className="ct-radio-group">
+                        {(['Yes', 'No', 'Unknown'] as const).map(val => (
+                          <label key={val} className="ct-radio-label">
+                            <input
+                              type="radio"
+                              name={`breathing-${s.id}`}
+                              checked={override.breathing === val}
+                              onChange={() => setOverrides(prev => ({ ...prev, [s.id]: { ...prev[s.id], breathing: val } }))}
+                            />
+                            <span>{val}</span>
+                          </label>
+                        ))}
+                      </div>
+                    </div>
+
+                    {/* Phone Number */}
+                    <div className="ct-field">
+                      <div className="ct-field-label"><span>Phone Number</span></div>
+                      <input
+                        type="tel"
+                        className="ct-input"
+                        placeholder="e.g. 519-555-1234"
+                        value={override.phoneNumber}
+                        onChange={e => setOverrides(prev => ({ ...prev, [s.id]: { ...prev[s.id], phoneNumber: e.target.value } }))}
+                      />
+                    </div>
+
+                    {/* Additional Notes */}
+                    <div className="ct-field">
+                      <div className="ct-field-label"><span>Additional Notes</span></div>
+                      <textarea
+                        className="ct-input ct-textarea"
+                        placeholder="Additional notes..."
+                        rows={2}
+                        value={override.cautionNotes}
+                        onChange={e => setOverrides(prev => ({ ...prev, [s.id]: { ...prev[s.id], cautionNotes: e.target.value } }))}
+                      />
                     </div>
                   </div>
                 )}
