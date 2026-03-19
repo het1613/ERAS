@@ -1,10 +1,11 @@
-import { useState, useCallback, useEffect } from "react";
+import { useState, useCallback, useEffect, useMemo } from "react";
 import { DispatchSuggestion } from "../components/types";
 import { useWebSocket } from "../contexts/WebSocketContext";
 
 interface UseDispatchSuggestionResult {
 	suggestion: DispatchSuggestion | null;
 	loading: boolean;
+	queueLength: number;
 	findBest: (incidentId: string) => Promise<void>;
 	accept: () => Promise<void>;
 	decline: () => Promise<void>;
@@ -52,10 +53,11 @@ function parseSuggestionData(data: any): DispatchSuggestion {
 }
 
 export function useDispatchSuggestion(): UseDispatchSuggestionResult {
-	const [suggestion, setSuggestion] = useState<DispatchSuggestion | null>(
-		null
-	);
+	const [queue, setQueue] = useState<DispatchSuggestion[]>([]);
 	const [loading, setLoading] = useState(false);
+
+	const suggestion = useMemo(() => queue[0] || null, [queue]);
+	const queueLength = queue.length;
 
 	const { subscribe } = useWebSocket();
 	const apiUrl = import.meta.env.VITE_API_URL || "http://localhost:8000";
@@ -63,13 +65,13 @@ export function useDispatchSuggestion(): UseDispatchSuggestionResult {
 	useEffect(() => {
 		return subscribe((msg) => {
 			if (msg.type === "system_reset") {
-				setSuggestion(null);
+				setQueue([]);
 				setLoading(false);
 				return;
 			}
 			if (msg.type === "dispatch_suggestion" && msg.data) {
 				const parsed = parseSuggestionData(msg.data);
-				setSuggestion(parsed);
+				setQueue((prev) => [...prev, parsed]);
 				setLoading(false);
 			}
 		});
@@ -89,7 +91,7 @@ export function useDispatchSuggestion(): UseDispatchSuggestionResult {
 					throw new Error(err.detail || `HTTP ${res.status}`);
 				}
 				const data = await res.json();
-				setSuggestion(parseSuggestionData(data));
+				setQueue((prev) => [...prev, parseSuggestionData(data)]);
 			} catch (err) {
 				console.error("Failed to find best assignment:", err);
 				alert(
@@ -113,7 +115,7 @@ export function useDispatchSuggestion(): UseDispatchSuggestionResult {
 		} catch (err) {
 			console.error("Failed to accept assignment:", err);
 		} finally {
-			setSuggestion(null);
+			setQueue((prev) => prev.slice(1));
 		}
 	}, [apiUrl, suggestion]);
 
@@ -135,7 +137,7 @@ export function useDispatchSuggestion(): UseDispatchSuggestionResult {
 		} catch (err) {
 			console.error("Failed to decline assignment:", err);
 		} finally {
-			setSuggestion(null);
+			setQueue((prev) => prev.slice(1));
 		}
 	}, [apiUrl, suggestion]);
 
@@ -161,13 +163,13 @@ export function useDispatchSuggestion(): UseDispatchSuggestionResult {
 			const data = await res.json();
 			if (data.status === "no_vehicles_available") {
 				alert("No more available vehicles to assign.");
-				setSuggestion(null);
+				setQueue((prev) => prev.slice(1));
 				setLoading(false);
 			}
 		} catch (err) {
 			console.error("Failed to decline and reassign:", err);
 			alert(err instanceof Error ? err.message : "Failed to reassign");
-			setSuggestion(null);
+			setQueue((prev) => prev.slice(1));
 			setLoading(false);
 		}
 	}, [apiUrl, suggestion]);
@@ -175,6 +177,7 @@ export function useDispatchSuggestion(): UseDispatchSuggestionResult {
 	return {
 		suggestion,
 		loading,
+		queueLength,
 		findBest,
 		accept,
 		decline,

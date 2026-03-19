@@ -118,6 +118,16 @@
 .eras-navbar-dot.online { background: #4ade80; }
 .eras-navbar-dot.offline { background: var(--accent-danger); }
 
+.eras-navbar-test-progress {
+  font-size: var(--text-xs);
+  color: rgba(255, 255, 255, 0.7);
+  font-weight: var(--weight-medium);
+  padding: 3px 8px;
+  border-radius: var(--radius-md);
+  background: rgba(255, 255, 255, 0.1);
+  white-space: nowrap;
+}
+
 .eras-navbar-status-label {
   font-size: var(--text-xs);
   color: rgba(255, 255, 255, 0.5);

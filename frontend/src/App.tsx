@@ -4,24 +4,29 @@ import Caller from "./components/Caller";
 import CallTaker from "./components/CallTaker";
 import PastCases from "./components/PastCases";
 import NavBar from "./components/NavBar";
+import TestResultsModal from "./components/TestResultsModal";
 import { WebSocketProvider } from "./contexts/WebSocketContext";
+import { DispatchTestProvider } from "./contexts/DispatchTestContext";
 import "./App.css";
 
 function App() {
 	return (
 		<BrowserRouter>
 			<WebSocketProvider>
-				<div className="app">
-					<NavBar />
-					<main className="app-main">
-						<Routes>
-							<Route path="/" element={<Dashboard />} />
-							<Route path="/caller" element={<Caller />} />
-							<Route path="/call-taker" element={<CallTaker />} />
-							<Route path="/past-cases" element={<PastCases />} />
-						</Routes>
-					</main>
-				</div>
+				<DispatchTestProvider>
+					<div className="app">
+						<NavBar />
+						<main className="app-main">
+							<Routes>
+								<Route path="/" element={<Dashboard />} />
+								<Route path="/caller" element={<Caller />} />
+								<Route path="/call-taker" element={<CallTaker />} />
+								<Route path="/past-cases" element={<PastCases />} />
+							</Routes>
+						</main>
+					</div>
+					<TestResultsModal />
+				</DispatchTestProvider>
 			</WebSocketProvider>
 		</BrowserRouter>
 	);
