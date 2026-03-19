@@ -1,4 +1,4 @@
-import { useMemo } from "react";
+import { useMemo, useEffect, useRef } from "react";
 import { Truck, Navigation, MapPin } from "lucide-react";
 import Badge from "./ui/Badge";
 import EmptyState from "./ui/EmptyState";
@@ -42,13 +42,25 @@ interface PanelProps {
 	units: UnitInfo[];
 	onUnitClick: (unit: UnitInfo) => void;
 	assignmentMap?: Record<string, { incidentType: string; location: string }>;
+	focusedUnitId?: string | null;
 }
 
 export default function AmbulancePanel({
 	units,
 	onUnitClick,
 	assignmentMap = {},
+	focusedUnitId,
 }: PanelProps) {
+	const cardRefs = useRef<Record<string, HTMLButtonElement | null>>({});
+
+	useEffect(() => {
+		if (focusedUnitId && cardRefs.current[focusedUnitId]) {
+			const idx = sortedUnits.findIndex(u => u.id === focusedUnitId);
+			const scrollToId = idx > 0 ? sortedUnits[idx - 1].id : focusedUnitId;
+			cardRefs.current[scrollToId]?.scrollIntoView({ behavior: "smooth", block: "start" });
+		}
+	}, [focusedUnitId]);
+
 	const sortedUnits = useMemo(() => {
 		return [...units].sort((a, b) => {
 			const aOrder = STATUS_SORT_ORDER[a.status] ?? 9;
@@ -91,7 +103,8 @@ export default function AmbulancePanel({
 						return (
 							<button
 								key={u.id}
-								className="amb-card"
+								ref={el => { cardRefs.current[u.id] = el; }}
+								className={`amb-card${focusedUnitId === u.id ? " amb-card-focused" : ""}`}
 								style={{ borderLeftColor: cfg.color }}
 								onClick={() => onUnitClick(u)}
 							>

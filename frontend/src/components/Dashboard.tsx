@@ -175,6 +175,7 @@ const Dashboard = () => {
 							units={units}
 							onUnitClick={(unit) => setFocusedUnit(unit)}
 							assignmentMap={assignmentMap}
+							focusedUnitId={focusedUnit?.id ?? null}
 						/>
 					)}
 				</div>
@@ -194,6 +195,10 @@ const Dashboard = () => {
 					onIncidentClick={(id) => {
 						setActiveView("Cases");
 						setFocusedIncidentId(id);
+					}}
+					onAmbulanceClick={(unit) => {
+						setActiveView("Ambulances");
+						setFocusedUnit(unit);
 					}}
 					onDispatch={findBest}
 					dispatchLoading={dispatchLoading}

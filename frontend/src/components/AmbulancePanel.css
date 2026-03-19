@@ -19,6 +19,11 @@
   background: var(--surface-secondary);
 }
 
+.amb-card-focused {
+  box-shadow: 0 0 0 2px var(--accent-blue, #2563eb);
+  background: var(--surface-secondary);
+}
+
 .amb-card-top {
   display: flex;
   align-items: center;

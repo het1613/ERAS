@@ -101,6 +101,7 @@ interface MapPanelProps {
 	onCloseSuggestion?: () => void;
 	onDeclineSuggestion?: () => void;
 	onIncidentClick?: (incidentId: string) => void;
+	onAmbulanceClick?: (unit: UnitInfo) => void;
 	onDispatch?: (incidentId: string) => void;
 	dispatchLoading?: boolean;
 }
@@ -120,6 +121,7 @@ export default function MapPanel({
 	onCloseSuggestion,
 	onDeclineSuggestion,
 	onIncidentClick,
+	onAmbulanceClick,
 	onDispatch,
 	dispatchLoading,
 }: MapPanelProps) {
@@ -177,6 +179,7 @@ export default function MapPanel({
 						position={position}
 						icon={getAmbulanceIcon(color)}
 						title={`${unit.id} - ${unit.status}`}
+					onClick={() => onAmbulanceClick?.(unit)}
 					/>
 				);
 			})}
