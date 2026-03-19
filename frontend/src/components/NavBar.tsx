@@ -14,10 +14,13 @@ const NAV_LINKS = [
 
 export default function NavBar() {
   const { connected } = useWebSocket();
-  const { phase, createdCount, dispatchedCount, manualMode, toggleManualMode, startTest } = useDispatchTest();
+  const {
+    phase, createdCount, dispatchedCount, manualMode, toggleManualMode,
+    startTest, testLocked, currentRound,
+  } = useDispatchTest();
   const [resetting, setResetting] = useState(false);
   const apiUrl = import.meta.env.VITE_API_URL || 'http://localhost:8000';
-  const testActive = phase === 'running' || phase === 'waiting' || phase === 'resetting';
+  const testActive = phase === 'round_running' || phase === 'round_waiting' || phase === 'resetting' || phase === 'tlx';
 
   const handleReset = async () => {
     if (!window.confirm('Reset all data? This will clear all calls, cases, and dispatch state.')) return;
@@ -56,9 +59,10 @@ export default function NavBar() {
 
       <div className="eras-navbar-status">
         <button
-          className={`eras-navbar-toggle${manualMode ? ' eras-navbar-toggle-on' : ''}`}
+          className={`eras-navbar-toggle${manualMode ? ' eras-navbar-toggle-on' : ''}${testLocked ? ' eras-navbar-toggle-locked' : ''}`}
           onClick={toggleManualMode}
-          title={manualMode ? 'Switch to optimizer mode' : 'Switch to manual mode'}
+          disabled={testLocked}
+          title={testLocked ? 'Mode locked during test' : manualMode ? 'Switch to optimizer mode' : 'Switch to manual mode'}
         >
           <span className="eras-navbar-toggle-track">
             <span className="eras-navbar-toggle-thumb" />
@@ -76,7 +80,7 @@ export default function NavBar() {
         </button>
         {testActive && (
           <span className="eras-navbar-test-progress">
-            {createdCount}/6 created · {dispatchedCount}/6 dispatched
+            Round {currentRound}/2 · {createdCount}/6 created · {dispatchedCount}/6 dispatched
           </span>
         )}
         <button

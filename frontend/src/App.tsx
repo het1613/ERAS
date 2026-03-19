@@ -6,6 +6,7 @@ import PastCases from "./components/PastCases";
 import NavBar from "./components/NavBar";
 import TestResultsModal from "./components/TestResultsModal";
 import TestConsentModal from "./components/TestConsentModal";
+import TlxSurveyModal from "./components/TlxSurveyModal";
 import { WebSocketProvider } from "./contexts/WebSocketContext";
 import { DispatchTestProvider } from "./contexts/DispatchTestContext";
 import "./App.css";
@@ -26,7 +27,8 @@ function App() {
 							</Routes>
 						</main>
 					</div>
-						<TestConsentModal />
+					<TestConsentModal />
+					<TlxSurveyModal />
 					<TestResultsModal />
 				</DispatchTestProvider>
 			</WebSocketProvider>

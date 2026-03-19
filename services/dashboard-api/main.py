@@ -206,6 +206,24 @@ class GeocodeRequest(BaseModel):
     address: str
 
 
+class CreateUserStudyRequest(BaseModel):
+    round_order: str  # "manual_first" or "optimizer_first"
+
+
+class SaveStudyRoundRequest(BaseModel):
+    study_id: str
+    round_number: int
+    mode: str
+    dispatch_times: list
+    avg_dispatch_time_ms: float
+    tlx_mental_demand: int
+    tlx_physical_demand: int
+    tlx_temporal_demand: int
+    tlx_effort: int
+    tlx_performance: int
+    tlx_frustration: int
+
+
 # ---------------------------------------------------------------------------
 # Health
 # ---------------------------------------------------------------------------
@@ -746,6 +764,65 @@ async def geocode_address(req: GeocodeRequest):
 @app.get("/acr-codes")
 async def list_acr_codes():
     return {"codes": get_acr_codes_for_api()}
+
+
+# ---------------------------------------------------------------------------
+# User Studies (A/B dispatch testing with NASA TLX)
+# ---------------------------------------------------------------------------
+
+@app.post("/user-studies")
+async def create_user_study(req: CreateUserStudyRequest):
+    study_id = str(uuid.uuid4())
+    conn = get_connection()
+    try:
+        with conn.cursor() as cur:
+            cur.execute(
+                "INSERT INTO user_studies (id, round_order) VALUES (%s, %s)",
+                (study_id, req.round_order),
+            )
+        conn.commit()
+        return {"id": study_id, "round_order": req.round_order}
+    finally:
+        conn.close()
+
+
+@app.post("/user-studies/rounds")
+async def save_study_round(req: SaveStudyRoundRequest):
+    conn = get_connection()
+    try:
+        with conn.cursor() as cur:
+            cur.execute(
+                """INSERT INTO user_study_rounds
+                   (study_id, round_number, mode, dispatch_times, avg_dispatch_time_ms,
+                    tlx_mental_demand, tlx_physical_demand, tlx_temporal_demand,
+                    tlx_effort, tlx_performance, tlx_frustration, completed_at)
+                   VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, NOW())""",
+                (
+                    req.study_id, req.round_number, req.mode,
+                    json.dumps(req.dispatch_times), req.avg_dispatch_time_ms,
+                    req.tlx_mental_demand, req.tlx_physical_demand, req.tlx_temporal_demand,
+                    req.tlx_effort, req.tlx_performance, req.tlx_frustration,
+                ),
+            )
+        conn.commit()
+        return {"status": "saved"}
+    finally:
+        conn.close()
+
+
+@app.post("/user-studies/{study_id}/complete")
+async def complete_user_study(study_id: str):
+    conn = get_connection()
+    try:
+        with conn.cursor() as cur:
+            cur.execute(
+                "UPDATE user_studies SET completed_at = NOW() WHERE id = %s",
+                (study_id,),
+            )
+        conn.commit()
+        return {"status": "completed"}
+    finally:
+        conn.close()
 
 
 # ---------------------------------------------------------------------------

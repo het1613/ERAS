@@ -11,10 +11,10 @@ export default function TestConsentModal() {
 
 	return (
 		<div className="eras-dialog-overlay">
-			<div className="eras-dialog" style={{ maxWidth: 480 }}>
+			<div className="eras-dialog" style={{ maxWidth: 520 }}>
 				<div className="eras-dialog-header">
 					<span className="eras-dialog-title">
-						{isResetting ? "Preparing Test..." : "Dispatch Performance Test"}
+						{isResetting ? "Preparing Test..." : "Dispatch Performance Study"}
 					</span>
 				</div>
 				<div className="eras-dialog-body">
@@ -26,13 +26,22 @@ export default function TestConsentModal() {
 					) : (
 						<>
 							<p style={{ margin: "0 0 12px 0" }}>
-								You are about to begin a <strong>5-minute</strong> dispatch
-								performance test.
+								You are about to begin a dispatch performance study consisting
+								of <strong>two rounds</strong>.
 							</p>
 							<p style={{ margin: "0 0 12px 0" }}>
-								We will simulate incoming emergency incidents and measure your
-								performance in a simulated dispatch environment. Your response
-								times and decisions will be recorded.
+								In each round, you will dispatch 6 emergency incidents. One round
+								will use <strong>optimizer-assisted</strong> dispatch and the other
+								will use <strong>manual</strong> dispatch. The order is randomized.
+							</p>
+							<p style={{ margin: "0 0 12px 0" }}>
+								After each round, you will complete a brief workload survey
+								(NASA TLX). At the end, you will see a comparison of your
+								performance across both rounds.
+							</p>
+							<p style={{ margin: "0 0 12px 0", fontWeight: 500 }}>
+								Your response times, dispatch decisions, and survey responses
+								will be recorded for research purposes.
 							</p>
 							<p style={{ margin: 0 }}>
 								All existing data will be reset before the test begins.
