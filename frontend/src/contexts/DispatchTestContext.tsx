@@ -28,6 +28,9 @@ interface DispatchTestContextValue {
 	manualMode: boolean;
 	toggleManualMode: () => void;
 	startTest: () => void;
+	confirmConsent: () => void;
+	cancelConsent: () => void;
+	consentModalOpen: boolean;
 	dismissResults: () => void;
 }
 
@@ -86,6 +89,7 @@ export function DispatchTestProvider({ children }: { children: ReactNode }) {
 	const [phase, setPhase] = useState<TestPhase>("idle");
 	const [incidents, setIncidents] = useState<TestIncident[]>([]);
 	const [manualMode, setManualMode] = useState(false);
+	const [consentModalOpen, setConsentModalOpen] = useState(false);
 	const intervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
 	const timeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 	const createIndexRef = useRef(0);
@@ -187,15 +191,12 @@ export function DispatchTestProvider({ children }: { children: ReactNode }) {
 		}
 	}, [apiUrl]);
 
-	const startTest = useCallback(async () => {
+	const startTest = useCallback(() => {
 		if (phase !== "idle") return;
-		if (
-			!window.confirm(
-				"Start dispatch test? This will reset all data and create 6 incidents over 1 minute."
-			)
-		)
-			return;
+		setConsentModalOpen(true);
+	}, [phase]);
 
+	const confirmConsent = useCallback(async () => {
 		// Reset phase
 		setPhase("resetting");
 		setIncidents([]);
@@ -208,9 +209,11 @@ export function DispatchTestProvider({ children }: { children: ReactNode }) {
 			console.error("Reset failed:", err);
 			alert("Failed to reset system.");
 			setPhase("idle");
+			setConsentModalOpen(false);
 			return;
 		}
 
+		setConsentModalOpen(false);
 		setPhase("running");
 
 		// Create first incident immediately, then every 10s
@@ -224,7 +227,11 @@ export function DispatchTestProvider({ children }: { children: ReactNode }) {
 				return p;
 			});
 		}, TIMEOUT_MS);
-	}, [phase, apiUrl, createNextIncident]);
+	}, [apiUrl, createNextIncident]);
+
+	const cancelConsent = useCallback(() => {
+		setConsentModalOpen(false);
+	}, []);
 
 	const dismissResults = useCallback(() => {
 		setPhase("idle");
@@ -249,6 +256,9 @@ export function DispatchTestProvider({ children }: { children: ReactNode }) {
 				manualMode,
 				toggleManualMode,
 				startTest,
+				confirmConsent,
+				cancelConsent,
+				consentModalOpen,
 				dismissResults,
 			}}
 		>
