@@ -21,8 +21,9 @@ COPY shared/ /app/shared/
 
 # Copy and install dependencies
 COPY services/audio-processing/requirements.txt /app/requirements.txt
-# Upgrade pip and install dependencies
+# Upgrade pip, install PyTorch CPU first (separate index), then remaining deps
 RUN pip install --no-cache-dir --upgrade pip && \
+    pip install --no-cache-dir torch==2.2.2 torchaudio==2.2.2 --index-url https://download.pytorch.org/whl/cpu && \
     pip install --no-cache-dir -r requirements.txt
 
 # Copy service code
