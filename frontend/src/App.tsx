@@ -8,6 +8,7 @@ import TestResultsModal from "./components/TestResultsModal";
 import TestConsentModal from "./components/TestConsentModal";
 import TlxSurveyModal from "./components/TlxSurveyModal";
 import ResetModal from "./components/ResetModal";
+import FeedbackModal from "./components/FeedbackModal";
 import { WebSocketProvider } from "./contexts/WebSocketContext";
 import { DispatchTestProvider } from "./contexts/DispatchTestContext";
 import "./App.css";
@@ -31,6 +32,7 @@ function App() {
 					<TestConsentModal />
 					<ResetModal />
 					<TlxSurveyModal />
+					<FeedbackModal />
 					<TestResultsModal />
 				</DispatchTestProvider>
 			</WebSocketProvider>

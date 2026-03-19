@@ -1,4 +1,3 @@
-import { useState } from "react";
 import { useDispatchTest, TlxScores } from "../contexts/DispatchTestContext";
 import { PRIORITY_COLORS, CasePriority } from "./types";
 import "./ui/ConfirmDialog.css";
@@ -186,25 +185,12 @@ export default function TestResultsModal() {
 		round1TlxScores,
 		round2TlxScores,
 		dismissResults,
-		submitFeedback,
 	} = useDispatchTest();
-	const [feedback, setFeedback] = useState("");
-	const [submitted, setSubmitted] = useState(false);
 
 	if (phase !== "complete") return null;
 
 	const rawTlx1 = computeRawTlx(round1TlxScores);
 	const rawTlx2 = computeRawTlx(round2TlxScores);
-
-	const handleClose = async () => {
-		if (!submitted) {
-			await submitFeedback(feedback);
-			setSubmitted(true);
-		}
-		setFeedback("");
-		setSubmitted(false);
-		dismissResults();
-	};
 
 	return (
 		<div className="eras-dialog-overlay">
@@ -338,48 +324,10 @@ export default function TestResultsModal() {
 							</tr>
 						</tbody>
 					</table>
-
-					<h3
-						style={{
-							margin: "20px 0 8px 0",
-							fontSize: "var(--text-sm)",
-							fontWeight: 600,
-							color: "var(--text-primary)",
-						}}
-					>
-						Additional Feedback
-					</h3>
-					<p
-						style={{
-							margin: "0 0 8px 0",
-							fontSize: "var(--text-xs)",
-							color: "var(--text-tertiary)",
-						}}
-					>
-						Please share any thoughts, observations, or feedback about your experience.
-					</p>
-					<textarea
-						value={feedback}
-						onChange={(e) => setFeedback(e.target.value)}
-						placeholder="Optional — any comments about the two dispatch modes, usability, or the study itself..."
-						rows={4}
-						style={{
-							width: "100%",
-							padding: "8px 10px",
-							fontSize: "var(--text-sm)",
-							borderRadius: "var(--radius-md)",
-							border: "1px solid var(--border-default)",
-							background: "var(--surface-base)",
-							color: "var(--text-primary)",
-							resize: "vertical",
-							fontFamily: "inherit",
-							boxSizing: "border-box",
-						}}
-					/>
 				</div>
 				<div className="eras-dialog-footer">
 					<button
-						onClick={handleClose}
+						onClick={dismissResults}
 						style={{
 							padding: "6px 16px",
 							borderRadius: "var(--radius-md)",

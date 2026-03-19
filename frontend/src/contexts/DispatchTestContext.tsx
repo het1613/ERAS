@@ -33,6 +33,7 @@ type TestPhase =
 	| "round_running"
 	| "round_waiting"
 	| "tlx"
+	| "feedback"
 	| "complete";
 
 type RoundMode = "manual" | "optimizer";
@@ -219,7 +220,7 @@ export function DispatchTestProvider({ children }: { children: ReactNode }) {
 
 	// Cleanup timers on phase change to idle/complete/tlx
 	useEffect(() => {
-		if (phase === "complete" || phase === "idle" || phase === "tlx") {
+		if (phase === "complete" || phase === "idle" || phase === "tlx" || phase === "feedback") {
 			if (intervalRef.current) {
 				clearInterval(intervalRef.current);
 				intervalRef.current = null;
@@ -429,11 +430,11 @@ export function DispatchTestProvider({ children }: { children: ReactNode }) {
 				setCurrentRound(2);
 				startRound(2, roundOrder);
 			} else {
-				// Round 2 complete — show results (study completed on feedback submit)
+				// Round 2 complete — show feedback form before results
 				setRound2Incidents([...incidents]);
 				setRound2TlxScores(scores);
 				setTestLocked(false);
-				setPhase("complete");
+				setPhase("feedback");
 			}
 		},
 		[incidents, currentRound, roundOrder, studyId, apiUrl, startRound]
@@ -452,6 +453,7 @@ export function DispatchTestProvider({ children }: { children: ReactNode }) {
 					console.error("Failed to complete study:", err);
 				}
 			}
+			setPhase("complete");
 		},
 		[studyId, apiUrl]
 	);
