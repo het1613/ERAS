@@ -495,6 +495,79 @@ async def find_best_assignment(request: FindBestRequest):
     return result
 
 
+class PreviewRequest(BaseModel):
+    incident_id: str
+    vehicle_id: str
+
+
+@app.post("/assignments/preview")
+async def preview_assignment(request: PreviewRequest):
+    """
+    Preview a dispatch assignment for a specific vehicle-incident pair.
+    Fetches OSRM route and nearest hospital without running the full ILP optimizer.
+    Returns the same shape as find-best so the frontend can display it identically.
+    """
+    vehicle_tracker.update_vehicle_positions()
+
+    target_incident = get_incident_by_id(request.incident_id)
+    if not target_incident:
+        raise HTTPException(status_code=404, detail="Incident not found")
+
+    vehicle = next((v for v in vehicles if v.id == request.vehicle_id), None)
+    if not vehicle:
+        raise HTTPException(status_code=404, detail="Vehicle not found")
+
+    # Fetch OSRM route
+    route_preview, route_duration = fetch_route_from_osrm(
+        vehicle.lat, vehicle.lon, target_incident["lat"], target_incident["lon"]
+    )
+
+    # Find nearest hospital
+    hospital_coords, hospital_metadata = get_hospitals_from_db()
+    inc_coord = np.array([target_incident["lat"], target_incident["lon"]])
+    dists = np.linalg.norm(hospital_coords - inc_coord, axis=1)
+    nearest_idx = int(np.argmin(dists))
+    hospital = hospital_metadata[nearest_idx]
+
+    suggestion_id = str(uuid.uuid4())
+
+    assignment_suggestion = AssignmentSuggestion(
+        suggestion_id=suggestion_id,
+        suggested_vehicle_id=request.vehicle_id,
+        route=f"Route for {request.vehicle_id} to incident at ({target_incident['lat']:.4f}, {target_incident['lon']:.4f})",
+        timestamp=datetime.now(),
+        hospital_id=hospital["id"],
+        hospital_name=hospital["name"],
+        hospital_lat=hospital["lat"],
+        hospital_lon=hospital["lon"],
+        hospital_address=hospital.get("address"),
+    )
+
+    vehicle_assignments[suggestion_id] = {
+        "suggestion": assignment_suggestion,
+        "incident_id": request.incident_id,
+        "route_preview": route_preview,
+        "hospital": hospital,
+        "is_reroute": False,
+        "reassignment": None,
+        "preempted_incident": None,
+    }
+
+    result = assignment_suggestion.model_dump()
+    result["route_preview"] = route_preview
+    result["incident"] = {
+        "id": target_incident["id"],
+        "type": target_incident.get("type"),
+        "priority": target_incident.get("priority"),
+        "location": target_incident.get("location"),
+        "lat": target_incident["lat"],
+        "lon": target_incident["lon"],
+    }
+    result["hospital"] = hospital
+    result["duration_seconds"] = int(route_duration) if route_duration else None
+    return result
+
+
 @app.get("/assignments/{suggestion_id}")
 async def get_assignment(suggestion_id: str):
     """

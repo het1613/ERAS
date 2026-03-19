@@ -514,6 +514,29 @@ async def proxy_find_best(request: FindBestRequest):
         raise HTTPException(status_code=503, detail="Geospatial service unavailable")
 
 
+class PreviewRequest(BaseModel):
+    incident_id: str
+    vehicle_id: str
+
+
+@app.post("/assignments/preview")
+async def proxy_preview(request: PreviewRequest):
+    try:
+        async with httpx.AsyncClient() as client:
+            response = await client.post(
+                f"{GEOSPATIAL_DISPATCH_URL}/assignments/preview",
+                json=request.model_dump(), timeout=15.0,
+            )
+            response.raise_for_status()
+            return response.json()
+    except httpx.HTTPStatusError as e:
+        raise HTTPException(status_code=e.response.status_code,
+                            detail=e.response.json().get("detail", "Error"))
+    except httpx.RequestError as e:
+        logger.error(f"Error proxying preview: {e}")
+        raise HTTPException(status_code=503, detail="Geospatial service unavailable")
+
+
 @app.post("/assignments/{suggestion_id}/accept")
 async def proxy_accept(suggestion_id: str):
     try:

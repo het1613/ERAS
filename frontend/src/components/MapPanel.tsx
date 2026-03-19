@@ -10,6 +10,7 @@ import {
 import "./MapPanel.css";
 import { UnitInfo, UnitStatus } from "./AmbulancePanel";
 import { CaseInfo, CasePriority, DispatchSuggestion, Hospital } from "./types";
+import { Truck } from "lucide-react";
 
 const RAW_PRIORITY_COLORS: Record<CasePriority, string> = {
 	Purple: "#7c3aed",
@@ -105,6 +106,7 @@ interface MapPanelProps {
 	onDispatch?: (incidentId: string) => void;
 	dispatchLoading?: boolean;
 	focusedIncidentId?: string | null;
+	dispatchingIncidentId?: string | null;
 }
 
 function formatVehicleLabel(id: string) {
@@ -126,6 +128,7 @@ export default function MapPanel({
 	onDispatch,
 	dispatchLoading,
 	focusedIncidentId,
+	dispatchingIncidentId,
 }: MapPanelProps) {
 	const apiKey = import.meta.env.VITE_GOOGLE_MAPS_API_KEY;
 	const { isLoaded } = useLoadScript({ googleMapsApiKey: apiKey! });
@@ -162,6 +165,18 @@ export default function MapPanel({
 
 	return (
 		<div style={{ position: "absolute", inset: 0 }}>
+			{dispatchingIncidentId && !dispatchSuggestion && (
+				<div style={{
+					position: "absolute", top: 12, left: "50%", transform: "translateX(-50%)",
+					zIndex: 10, background: "var(--surface-elevated)", color: "var(--text-primary)",
+					padding: "8px 16px", borderRadius: "var(--radius-lg)",
+					boxShadow: "var(--shadow-lg)", fontSize: "var(--text-sm)", fontWeight: 500,
+					display: "flex", alignItems: "center", gap: 8,
+				}}>
+					<Truck size={14} />
+					Click an ambulance to dispatch
+				</div>
+			)}
 			<GoogleMap
 				zoom={12}
 				center={defaultCenter}

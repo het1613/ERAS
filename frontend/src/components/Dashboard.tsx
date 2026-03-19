@@ -49,10 +49,12 @@ const Dashboard = () => {
 
 	const { vehicles, routes, incidentVehicleMap } = useVehicleUpdates();
 	const units = vehicles.map(vehicleToUnit);
+	const [dispatchingIncidentId, setDispatchingIncidentId] = useState<string | null>(null);
+
 	const {
 		suggestion,
 		loading: dispatchLoading,
-		findBest,
+		preview,
 		accept,
 		decline,
 		declineAndReassign,
@@ -62,8 +64,29 @@ const Dashboard = () => {
 
 	const handleDispatch = useCallback((incidentId: string) => {
 		setFocusedIncidentId(incidentId);
-		findBest(incidentId);
-	}, [findBest]);
+		setDispatchingIncidentId(incidentId);
+	}, []);
+
+	const handleAccept = useCallback(async () => {
+		await accept();
+		setDispatchingIncidentId(null);
+	}, [accept]);
+
+	const handleDecline = useCallback(async () => {
+		await decline();
+		setDispatchingIncidentId(null);
+	}, [decline]);
+
+	const handleAmbulanceClick = useCallback((unit: UnitInfo) => {
+		if (dispatchingIncidentId) {
+			// Convert display ID back to vehicle id (e.g. "Ambulance 1" -> "ambulance-1")
+			const vehicleId = unit.id.toLowerCase().replace(/\s+/g, "-");
+			preview(dispatchingIncidentId, vehicleId);
+		} else {
+			setActiveView("Ambulances");
+			setFocusedUnit(unit);
+		}
+	}, [dispatchingIncidentId, preview]);
 
 	// Only show call-taker-originated incidents in the cases tab
 	const callTakerIncidents = useMemo(
@@ -194,20 +217,18 @@ const Dashboard = () => {
 					incidents={activeIncidents}
 					hospitals={hospitals}
 					dispatchSuggestion={suggestion}
-					onAcceptSuggestion={accept}
-					onCloseSuggestion={decline}
+					onAcceptSuggestion={handleAccept}
+					onCloseSuggestion={handleDecline}
 					onDeclineSuggestion={declineAndReassign}
 					onIncidentClick={(id) => {
 						setActiveView("Cases");
 						setFocusedIncidentId(id);
 					}}
-					onAmbulanceClick={(unit) => {
-						setActiveView("Ambulances");
-						setFocusedUnit(unit);
-					}}
+					onAmbulanceClick={handleAmbulanceClick}
 					onDispatch={handleDispatch}
 					dispatchLoading={dispatchLoading}
 					focusedIncidentId={focusedIncidentId}
+					dispatchingIncidentId={dispatchingIncidentId}
 				/>
 			</div>
 		</div>

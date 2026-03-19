@@ -7,6 +7,7 @@ interface UseDispatchSuggestionResult {
 	loading: boolean;
 	queueLength: number;
 	findBest: (incidentId: string) => Promise<void>;
+	preview: (incidentId: string, vehicleId: string) => Promise<void>;
 	accept: () => Promise<void>;
 	decline: () => Promise<void>;
 	declineAndReassign: () => Promise<void>;
@@ -104,6 +105,37 @@ export function useDispatchSuggestion(): UseDispatchSuggestionResult {
 		[apiUrl]
 	);
 
+	const preview = useCallback(
+		async (incidentId: string, vehicleId: string) => {
+			setLoading(true);
+			try {
+				const res = await fetch(`${apiUrl}/assignments/preview`, {
+					method: "POST",
+					headers: { "Content-Type": "application/json" },
+					body: JSON.stringify({ incident_id: incidentId, vehicle_id: vehicleId }),
+				});
+				if (!res.ok) {
+					const err = await res.json().catch(() => ({}));
+					throw new Error(err.detail || `HTTP ${res.status}`);
+				}
+				const data = await res.json();
+				// Replace current suggestion (user is picking a different ambulance)
+				setQueue((prev) => {
+					const rest = prev.length > 0 ? prev.slice(1) : [];
+					return [parseSuggestionData(data), ...rest];
+				});
+			} catch (err) {
+				console.error("Failed to preview assignment:", err);
+				alert(
+					err instanceof Error ? err.message : "Failed to preview assignment"
+				);
+			} finally {
+				setLoading(false);
+			}
+		},
+		[apiUrl]
+	);
+
 	const accept = useCallback(async () => {
 		if (!suggestion) return;
 		try {
@@ -179,6 +211,7 @@ export function useDispatchSuggestion(): UseDispatchSuggestionResult {
 		loading,
 		queueLength,
 		findBest,
+		preview,
 		accept,
 		decline,
 		declineAndReassign,
