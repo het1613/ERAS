@@ -342,7 +342,7 @@ async def twilio_voice_webhook():
 
     twiml = f"""<?xml version="1.0" encoding="UTF-8"?>
 <Response>
-    <Say voice="alice">You have reached the Emergency Response Assistance System. Please describe your emergency.</Say>
+    <Say voice="alice">Hello, nine one one, what is your emergency?</Say>
     <Connect>
         <Stream url="{stream_url}" track="inbound_track" />
     </Connect>
