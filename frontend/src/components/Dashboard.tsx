@@ -236,6 +236,7 @@ const Dashboard = () => {
 					focusedIncidentId={focusedIncidentId}
 					focusedIncidentSeq={focusedIncidentSeq}
 					dispatchingIncidentId={dispatchingIncidentId}
+					manualMode={manualMode}
 				/>
 			</div>
 		</div>

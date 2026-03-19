@@ -105,6 +105,7 @@ interface MapPanelProps {
 	focusedIncidentId?: string | null;
 	focusedIncidentSeq?: number;
 	dispatchingIncidentId?: string | null;
+	manualMode?: boolean;
 }
 
 function formatVehicleLabel(id: string) {
@@ -126,6 +127,7 @@ export default function MapPanel({
 	focusedIncidentId,
 	focusedIncidentSeq,
 	dispatchingIncidentId,
+	manualMode = false,
 }: MapPanelProps) {
 	const apiKey = import.meta.env.VITE_GOOGLE_MAPS_API_KEY;
 	const { isLoaded } = useLoadScript({ googleMapsApiKey: apiKey! });
@@ -227,8 +229,8 @@ export default function MapPanel({
 				);
 			})()}
 
-			{/* Preview route (dashed orange) */}
-				{dispatchSuggestion && dispatchSuggestion.routePreview.length > 0 && (
+			{/* Preview route (dashed orange) — hidden in manual mode */}
+				{!manualMode && dispatchSuggestion && dispatchSuggestion.routePreview.length > 0 && (
 					<Polyline key="preview-route" path={dispatchSuggestion.routePreview} options={previewPolylineOptions} />
 				)}
 
@@ -284,8 +286,8 @@ export default function MapPanel({
 						</div>
 					</OverlayView>
 				))}
-				{/* Reassignment route preview (dashed blue) for reroute suggestions */}
-				{dispatchSuggestion?.isReroute && dispatchSuggestion.reassignment?.routePreview &&
+				{/* Reassignment route preview (dashed blue) for reroute suggestions — hidden in manual mode */}
+				{!manualMode && dispatchSuggestion?.isReroute && dispatchSuggestion.reassignment?.routePreview &&
 					dispatchSuggestion.reassignment.routePreview.length > 0 && (
 					<Polyline
 						key="reassign-preview-route"
