@@ -75,6 +75,12 @@
   flex-shrink: 0;
 }
 
+.cc-time-urgent,
+.cc-time-urgent .cc-detail-icon {
+  color: #dc2626;
+  font-weight: var(--weight-semibold);
+}
+
 /* ── Progress Steps ──────────────────────────────────── */
 .cc-progress {
   display: flex;
