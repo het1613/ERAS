@@ -1,6 +1,6 @@
 """
 AI Suggestion Engine Service - Consumes transcripts, matches Ontario ACR Problem Codes,
-extracts location via local LLM (Ollama), geocodes addresses, and publishes structured
+extracts location via OpenAI GPT, geocodes addresses, and publishes structured
 suggestions with MPDS priority levels to Kafka.
 """
 
@@ -15,6 +15,7 @@ from collections import defaultdict
 from datetime import datetime
 
 import requests
+from openai import OpenAI
 
 from shared.kafka_client import create_consumer, create_producer
 from shared.types import Transcript, Suggestion
@@ -37,11 +38,13 @@ MAX_SUGGESTIONS = 3
 # Priority ordering for tie-breaking (higher severity first)
 PRIORITY_RANK = {"Purple": 5, "Red": 4, "Orange": 3, "Yellow": 2, "Green": 1}
 
-# ── Ollama / LLM configuration ──────────────────────────────────────────────
-OLLAMA_BASE_URL = os.getenv("OLLAMA_BASE_URL", "http://ollama:11434")
-OLLAMA_MODEL = os.getenv("OLLAMA_MODEL", "llama3.2:3b")
+# ── OpenAI / GPT configuration ────────────────────────────────────────────────
+OPENAI_API_KEY = os.getenv("OPENAI_API_KEY", "")
+OPENAI_MODEL = os.getenv("OPENAI_MODEL", "gpt-4.1")
 
-LOCATION_EXTRACTION_PROMPT = """You are an emergency call location extractor. Given a transcript from a 911 emergency call, extract any location information mentioned.
+openai_client: OpenAI | None = None
+
+LOCATION_EXTRACTION_SYSTEM_PROMPT = """You are an emergency call location extractor. Given a transcript from a 911 emergency call, extract any location information mentioned.
 
 Look for:
 - Street addresses (e.g. "234 Columbia St")
@@ -53,10 +56,7 @@ Respond ONLY with a JSON object in this exact format, no other text:
 {"location": "<extracted address or null if none found>", "confidence": <0.0 to 1.0>}
 
 If no location is mentioned, respond with:
-{"location": null, "confidence": 0.0}
-
-Transcript:
-"""
+{"location": null, "confidence": 0.0}"""
 
 # In-memory transcript accumulator: session_id -> list of transcript texts
 transcript_history: dict[str, list[str]] = defaultdict(list)
@@ -79,80 +79,41 @@ NOMINATIM_HEADERS = {"User-Agent": "ERAS-EmergencyDispatch/1.0"}
 NOMINATIM_VIEWBOX = "-80.7,43.3,-80.3,43.6"
 
 
-# ── Ollama helpers ───────────────────────────────────────────────────────────
+# ── OpenAI helpers ────────────────────────────────────────────────────────────
 
-def ensure_model_available() -> bool:
-    """Pull the configured model if not already present. Blocks until complete."""
-    try:
-        resp = requests.get(f"{OLLAMA_BASE_URL}/api/tags", timeout=10)
-        resp.raise_for_status()
-        models = [m["name"] for m in resp.json().get("models", [])]
-        base_model_name = OLLAMA_MODEL.split(":")[0]
-        if any(base_model_name in m for m in models):
-            logger.info(f"Model '{OLLAMA_MODEL}' already available")
-            return True
-    except Exception as e:
-        logger.warning(f"Could not check models: {e}")
-
-    logger.info(f"Pulling model '{OLLAMA_MODEL}' — this may take a few minutes on first run...")
-    try:
-        resp = requests.post(
-            f"{OLLAMA_BASE_URL}/api/pull",
-            json={"name": OLLAMA_MODEL},
-            stream=True,
-            timeout=900,
-        )
-        resp.raise_for_status()
-        for line in resp.iter_lines():
-            if line:
-                try:
-                    data = json.loads(line)
-                    status = data.get("status", "")
-                    if "error" in data:
-                        logger.error(f"  Model pull error: {data['error']}")
-                        return False
-                    total = data.get("total", 0)
-                    completed = data.get("completed", 0)
-                    if total and completed:
-                        pct = int(completed / total * 100)
-                        logger.info(f"  Model pull: {status} ({pct}%)")
-                    elif status:
-                        logger.info(f"  Model pull: {status}")
-                except json.JSONDecodeError:
-                    pass
-        logger.info(f"Model '{OLLAMA_MODEL}' pulled successfully")
-        return True
-    except requests.exceptions.Timeout:
-        logger.error(f"Model pull timed out — run 'docker exec eras-ollama ollama pull {OLLAMA_MODEL}' manually")
+def init_openai_client() -> bool:
+    """Initialize the OpenAI client. Returns True if successful."""
+    global openai_client
+    if not OPENAI_API_KEY:
+        logger.warning("OPENAI_API_KEY not set — location extraction will be unavailable")
         return False
-    except Exception as e:
-        logger.error(f"Failed to pull model '{OLLAMA_MODEL}': {e}", exc_info=True)
-        return False
+    openai_client = OpenAI(api_key=OPENAI_API_KEY)
+    logger.info(f"OpenAI client initialized (model: {OPENAI_MODEL})")
+    return True
 
 
 def extract_location(full_transcript: str) -> dict | None:
     """
-    Call Ollama to extract location from the accumulated transcript text.
+    Call OpenAI GPT to extract location from the accumulated transcript text.
     Returns {"location": str, "confidence": float} or None on failure.
     """
+    if not openai_client:
+        logger.warning("OpenAI client not initialized — skipping location extraction")
+        return None
+
     try:
-        resp = requests.post(
-            f"{OLLAMA_BASE_URL}/api/generate",
-            json={
-                "model": OLLAMA_MODEL,
-                "prompt": LOCATION_EXTRACTION_PROMPT + full_transcript,
-                "stream": False,
-                "format": "json",
-                "options": {
-                    "temperature": 0.1,
-                    "num_predict": 100,
-                },
-            },
-            timeout=30,
+        response = openai_client.chat.completions.create(
+            model=OPENAI_MODEL,
+            messages=[
+                {"role": "system", "content": LOCATION_EXTRACTION_SYSTEM_PROMPT},
+                {"role": "user", "content": full_transcript},
+            ],
+            temperature=0.1,
+            max_tokens=100,
+            response_format={"type": "json_object"},
         )
-        resp.raise_for_status()
-        raw_response = resp.json().get("response", "").strip()
-        logger.info(f"Ollama raw response: {raw_response}")
+        raw_response = response.choices[0].message.content.strip()
+        logger.info(f"GPT raw response: {raw_response}")
 
         parsed = json.loads(raw_response)
         location = parsed.get("location")
@@ -163,26 +124,8 @@ def extract_location(full_transcript: str) -> dict | None:
 
         return None
 
-    except requests.exceptions.ConnectionError:
-        logger.warning("Ollama not reachable — skipping location extraction")
-        return None
-    except requests.exceptions.Timeout:
-        logger.warning("Ollama request timed out — skipping location extraction")
-        return None
-    except requests.exceptions.HTTPError as e:
-        if e.response is not None and e.response.status_code == 404:
-            logger.warning(
-                f"Model '{OLLAMA_MODEL}' not found in Ollama — "
-                f"run 'docker exec eras-ollama ollama pull {OLLAMA_MODEL}' to download it"
-            )
-        else:
-            logger.warning(f"Ollama HTTP error: {e}")
-        return None
-    except (json.JSONDecodeError, KeyError, ValueError) as e:
-        logger.warning(f"Could not parse Ollama response: {e}")
-        return None
     except Exception as e:
-        logger.error(f"Unexpected error during location extraction: {e}", exc_info=True)
+        logger.warning(f"OpenAI location extraction failed: {e}")
         return None
 
 
@@ -440,20 +383,10 @@ def main():
     logger.info("Initializing AI Suggestion Engine Service (Ontario ACR)...")
     logger.info(f"Loaded {len(ACR_PROBLEM_CODES)} ACR Problem Codes")
     logger.info(f"Connecting to Kafka at: {bootstrap_servers}")
-    logger.info(f"Ollama URL: {OLLAMA_BASE_URL}, Model: {OLLAMA_MODEL}")
+    logger.info(f"OpenAI model: {OPENAI_MODEL}")
 
-    # Pull LLM model on startup (blocking, tolerates failure)
-    max_retries = 5
-    for attempt in range(1, max_retries + 1):
-        if ensure_model_available():
-            break
-        logger.warning(f"Model pull attempt {attempt}/{max_retries} failed, retrying in 10s...")
-        time.sleep(10)
-    else:
-        logger.warning(
-            "Could not pull LLM model after retries — "
-            "location extraction will be unavailable until Ollama is ready"
-        )
+    # Initialize OpenAI client (tolerates missing key)
+    init_openai_client()
 
     try:
         consumer = create_consumer(

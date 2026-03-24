@@ -87,22 +87,6 @@ services:
     networks:
       - eras-network
 
-  ollama:
-    image: ollama/ollama:latest
-    container_name: eras-ollama
-    ports:
-      - "11434:11434"
-    volumes:
-      - ollama_data:/root/.ollama
-    networks:
-      - eras-network
-    healthcheck:
-      test: ["CMD", "ollama", "list"]
-      interval: 10s
-      timeout: 5s
-      retries: 10
-      start_period: 15s
-
   suggestion-engine:
     build:
       context: .
@@ -111,14 +95,12 @@ services:
     environment:
       KAFKA_BOOTSTRAP_SERVERS: kafka:29092
       KAFKA_CONSUMER_GROUP_ID: suggestion-engine-service
-      OLLAMA_BASE_URL: http://ollama:11434
+      OPENAI_API_KEY: ${OPENAI_API_KEY}
     depends_on:
       kafka:
         condition: service_healthy
       audio-processing:
         condition: service_started
-      ollama:
-        condition: service_healthy
     networks:
       - eras-network
 
@@ -188,5 +170,4 @@ networks:
 
 volumes:
   postgres_data:
-  ollama_data:
 
